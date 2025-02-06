@@ -33,12 +33,12 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import MetaData, select, text, null, literal_column, literal, TableClause, Subquery, Table, ClauseElement, NamedFromClause, Function
+from sqlalchemy import MetaData, select, text, null, literal_column, literal, TableClause, Subquery, Table, ClauseElement, Function
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import schema as sqlschema, types as sqltypes, func as sqlfunc
 import sqlalchemy.sql as sql
 from sqlalchemy.sql.expression import ColumnElement, GenerativeSelect, Select, ColumnClause
-from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect
+from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromClause
 
 from sqlalchemy.engine import Engine, Connection
 
@@ -151,7 +151,7 @@ class ColForm:
         return cls(form, [cols[i] for i in idxs])
 
     @classmethod
-    def from_expr(cls, expr) -> "ColForm":
+    def from_expr(cls, expr:ColumnElement) -> "ColForm":
         return cls([None], [expr])
 
     @classmethod
@@ -350,7 +350,7 @@ class R2RStore(Store):
 
     @classmethod
     def _term_map_colforms(
-        cls, graph: Graph, dbtable: Table | NamedFromClause | Subquery, parent: Node, wheres: List[ClauseElement], 
+        cls, graph: Graph, dbtable: Table | NamedFromClause | Subquery, parent: Node, wheres: List[ColumnElement[bool]], 
             mapper: Node, shortcut:Node, obj=False
     ) -> Generator[tuple[ColForm, Table | NamedFromClause | Subquery], Any, Any]: 
         """For each Triples Map, yield a expression template containing table columns.
@@ -542,7 +542,8 @@ class R2RStore(Store):
         if isinstance(dbcol.type, sqltypes.DATE):
             dt = XSD.date.n3()
             n3col = '"' + sqlfunc.cast(dbcol, sqltypes.VARCHAR) + ('"^^' + dt)
-            n3col.original = dbcol
+            #XXX Not sure what this is supposed to do, but ColumnElement has no such attribute.
+            #n3col.original = dbcol
             return n3col
         if isinstance(dbcol.type, sqltypes.DATETIME) or isinstance(
             dbcol.type, sqltypes.TIMESTAMP
@@ -550,19 +551,19 @@ class R2RStore(Store):
             dt = XSD.dateTime.n3()
             value = sqlfunc.replace(sqlfunc.cast(dbcol, sqltypes.VARCHAR), " ", "T")
             n3col = '"' + value + ('"^^' + dt)
-            n3col.original = dbcol
+            #n3col.original = dbcol
             return n3col
         if isinstance(dbcol.type, sqltypes.BOOLEAN):
             dt = XSD.boolean.n3()
             value = sql.expression.case({1: "true", 0: "false"}, value=dbcol)
             n3col = '"' + value + ('"^^' + dt)
-            n3col.original = dbcol
+            #n3col.original = dbcol
             return n3col
         if isinstance(dbcol.type, sqltypes.INT):
             dt = XSD.integer.n3() # if this can run
             value = sqlfunc.cast(dbcol, sqltypes.VARCHAR)
             n3col = '"' + value + ('"^^' + dt)
-            n3col.original = dbcol
+            #n3col.original = dbcol
             return n3col
         ## TODO: create n3 literal for integers!
 
@@ -899,7 +900,7 @@ class R2RStore(Store):
         e = f'Expr not implemented: {getattr(expr, "name", None).__repr__()} {expr}'
         raise SparqlNotImplementedError(e)
 
-    def queryFilter(self, conn: Connection, part) -> SelectVarSubForm:
+    def queryFilter(self, conn: Connection, part:CompValue) -> SelectVarSubForm:
         part_query, var_subform = self.queryPart(conn, part.p)
 
         if getattr(part.expr, "name", None) == "Builtin_NOTEXISTS":

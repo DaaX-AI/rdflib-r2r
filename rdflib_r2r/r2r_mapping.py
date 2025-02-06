@@ -14,7 +14,7 @@ from rdflib import Graph, URIRef, Literal, BNode
 from rdflib.term import Node
 from rdflib.namespace import RDF, XSD, Namespace
 
-from sqlalchemy import MetaData, text, table, literal_column, types as sqltypes
+from sqlalchemy import MetaData, text, table, literal_column, types as sqltypes, ColumnElement
 from sqlalchemy import or_ as sql_or, and_ as sql_and
 from sqlalchemy.sql.expression import ClauseElement
 
@@ -251,7 +251,7 @@ class R2RMapping:
         t = text(inverse_expr.format(**col_replace, **param_replace))
         return t.bindparams(**field_values)
 
-    def get_node_filter(self, node, pat_maps) -> Dict[Pattern|NoneType, List[ClauseElement]]:
+    def get_node_filter(self, node, pat_maps) -> Dict[Pattern|NoneType, List[ColumnElement[bool]]]:
         
         # A pattern may be used in multiple places, so use sql_or
         # (but what happens if the table name is out of scope ...? )
