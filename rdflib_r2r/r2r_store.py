@@ -585,7 +585,7 @@ class R2RStore(Store):
 
     def queryPattern(
         self, metadata, pattern, restrict_tmaps=None
-    ) -> GenerativeSelectSubForm:
+    ) -> tuple[GenerativeSelect, List[SubForm]]:
         """Make a set of SubForms for a GenerativeSelect query from a triple pattern
 
         Args:
@@ -598,14 +598,14 @@ class R2RStore(Store):
         """
         querysubforms: List[SelectSubForm] = []
         # Triple Maps produce select queries
-        for tmap in self.mapping.graph[: RDF.type : rr.TriplesMap]: # TODO: get rid of rr.TriplesMap because it might not be explicitly stated in the mapping
+        for tmap in self.mapping.graph.subjects(RDF.type, rr.TriplesMap): # TODO: get rid of rr.TriplesMap because it might not be explicitly stated in the mapping
             if restrict_tmaps and (tmap not in restrict_tmaps):
                 mg = self.mapping.graph
                 refs = set(
                     ref
-                    for pomap in mg[tmap : rr.predicateObjectMap :]
-                    for omap in mg[pomap : rr.objectMap]
-                    for ref in mg[omap : rr.parentTriplesMap]
+                    for pomap in mg.objects(tmap, rr.predicateObjectMap)
+                    for omap in mg.objects(pomap, rr.objectMap)
+                    for ref in mg.objects(omap, rr.parentTriplesMap)
                 )
                 if not any(t in refs for t in restrict_tmaps):
                     continue
@@ -701,7 +701,7 @@ class R2RStore(Store):
 
     ###### SPARQL #######
 
-    def queryBGP(self, conn: Connection, bgp: BGP) -> GenerativeSelect:
+    def queryBGP(self, conn: Connection, bgp: BGP) -> SelectVarSubForm:
         """Generate a Basic Graph Pattern subquery
 
         Args:
@@ -728,17 +728,17 @@ class R2RStore(Store):
 #                         sm = mg.value(tmap, rr.subjectMap) # get object (== next(mg.objects(tmap, rr.subjectMap)))
 #                         if qo in mg[sm : rr["class"]]: # check if qo is in objects ( == (qo in mg.objects(sm, rr.class)) if it wasn't a syntax error) 
 #                             restriction.add(tmap)
-                    for sm in mg[ : rr["class"] : qo]:
-                       tmap = next(mg[: rr.subjectMap : sm])
+                    for sm in mg.subjects(rr["class"], qo):
+                       tmap = next(mg.subjects(rr.subjectMap, sm))
                        restriction.add(tmap)
                 # Find triple map restrictions based on predicates
-                for pomap in mg[: rr.predicate : qp]:
+                for pomap in mg.subjects(rr.predicate, qp):
                     # Other triple maps that share this pred-obj map
-                    for tmap in mg[: rr.predicateObjectMap : pomap]:
+                    for tmap in mg.subjects(rr.predicateObjectMap, pomap):
                         restriction.add(tmap)
                     # Referenced triple maps
-                    for omap in mg[pomap : rr.objectMap]:
-                        for tmap in mg[omap : rr.parentTriplesMap]:
+                    for omap in mg.objects(pomap, rr.objectMap):
+                        for tmap in mg.objects(omap, rr.parentTriplesMap):
                             # recursive ??
                             restriction.add(tmap)
                 if restriction:

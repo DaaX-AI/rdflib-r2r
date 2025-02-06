@@ -10,6 +10,7 @@ from string import Formatter
 from typing import Iterable, List, Tuple, Union, Dict
 
 from rdflib import Graph, URIRef, Literal, BNode
+from rdflib.term import Node
 from rdflib.namespace import RDF, XSD, Namespace
 
 from sqlalchemy import MetaData, text, table, literal_column, types as sqltypes
@@ -17,7 +18,7 @@ from sqlalchemy import or_ as sql_or, and_ as sql_and
 from sqlalchemy.sql.expression import ClauseElement
 
 from rdflib_r2r.sql_view import view2obj
-
+from parse import Result
 rr = Namespace("http://www.w3.org/ns/r2rml#")
 
 
@@ -45,16 +46,16 @@ def _get_table(graph, tmap):
 
 
 class R2RMapping:
-    graph = None
-    baseuri = None
+    graph:Graph
+    baseuri: str
 
     @dataclass(eq=True, order=True, frozen=True)
     class Pattern:
         tname: str
-        const: str = None
-        field: str = None
-        parser: str = None
-        inverse: str = None
+        const: str|None = None
+        field: str|None = None
+        parser: str|None = None
+        inverse: str|None = None
 
     @classmethod
     def from_db(cls, db, baseuri="http://example.com/base/"):
@@ -76,17 +77,18 @@ class R2RMapping:
             metadata = MetaData()
             metadata.reflect(conn)
             
-            tmaps = {}
+            tmaps: dict[str,Node] = {}
+            assert metadata.tables
             for tablename, table in metadata.tables.items():
                 tmap = tmaps.setdefault(tablename, BNode())
-                mg.add([tmap, RDF.type, rr.TriplesMap])
+                mg.add((tmap, RDF.type, rr.TriplesMap))
                 logtable = BNode()
-                mg.add([tmap, rr.logicalTable, logtable])
-                mg.add([logtable, rr.tableName, Literal(f'"{tablename}"')])
+                mg.add((tmap, rr.logicalTable, logtable))
+                mg.add((logtable, rr.tableName, Literal(f'"{tablename}"')))
 
                 s_map = BNode()
-                mg.add([tmap, rr.subjectMap, s_map])
-                mg.add([s_map, rr["class"], base[iri_safe(tablename)]])
+                mg.add((tmap, rr.subjectMap, s_map))
+                mg.add((s_map, rr["class"], base[iri_safe(tablename)]))
 
                 # TEMPORARY: duckdb hack
                 # duckdb returns the wrong primary keys!
@@ -109,25 +111,25 @@ class R2RMapping:
                 if primary_keys:
                     parts = ['%s={"%s"}' % (iri_safe(c), c) for c in primary_keys]
                     template = iri_safe(tablename) + "/" + ";".join(parts)
-                    mg.add([s_map, rr.template, Literal(template)])
-                    mg.add([s_map, rr.termType, rr.IRI])
+                    mg.add((s_map, rr.template, Literal(template)))
+                    mg.add((s_map, rr.termType, rr.IRI))
                 else:
-                    mg.add([s_map, rr.termType, rr.BlankNode])
+                    mg.add((s_map, rr.termType, rr.BlankNode))
 
                 for column in db.dialect.get_columns(conn, tablename, schema="main"):
                     colname = column["name"]
                     coltype = column["type"]
                     # Add a predicate-object map per column
                     pomap = BNode()
-                    mg.add([tmap, rr.predicateObjectMap, pomap])
+                    mg.add((tmap, rr.predicateObjectMap, pomap))
                     pname = f"{iri_safe(tablename)}#{iri_safe(colname)}"
-                    mg.add([pomap, rr.predicate, base[pname]])
+                    mg.add((pomap, rr.predicate, base[pname]))
 
                     o_map = BNode()
-                    mg.add([pomap, rr.objectMap, o_map])
-                    mg.add([o_map, rr.column, Literal(f'"{colname}"')])
+                    mg.add((pomap, rr.objectMap, o_map))
+                    mg.add((o_map, rr.column, Literal(f'"{colname}"')))
                     if isinstance(coltype, sqltypes.Integer):
-                        mg.add([o_map, rr.datatype, XSD.integer])
+                        mg.add((o_map, rr.datatype, XSD.integer))
 
                 foreign_keys = db.dialect.get_foreign_keys(
                     conn, tablename, schema="main"
@@ -135,23 +137,23 @@ class R2RMapping:
                 for fk in foreign_keys:
                     # Add another predicate-object map for every foreign key
                     pomap = BNode()
-                    mg.add([tmap, rr.predicateObjectMap, pomap])
+                    mg.add((tmap, rr.predicateObjectMap, pomap))
                     parts = [iri_safe(part) for part in fk["constrained_columns"]]
                     pname = f"{iri_safe(tablename)}#ref-{';'.join(parts)}"
-                    mg.add([pomap, rr.predicate, base[pname]])
+                    mg.add((pomap, rr.predicate, base[pname]))
 
                     o_map = BNode()
-                    mg.add([pomap, rr.objectMap, o_map])
+                    mg.add((pomap, rr.objectMap, o_map))
                     reftable = fk["referred_table"]
                     refmap = tmaps.setdefault(reftable, BNode())
-                    mg.add([o_map, rr.parentTriplesMap, refmap])
+                    mg.add((o_map, rr.parentTriplesMap, refmap))
 
                     colpairs = zip(fk["constrained_columns"], fk["referred_columns"])
                     for colname, refcol in colpairs:
                         join = BNode()
-                        mg.add([o_map, rr.joinCondition, join])
-                        mg.add([join, rr.child, Literal(f'"{colname}"')])
-                        mg.add([join, rr.parent, Literal(f'"{refcol}"')])
+                        mg.add((o_map, rr.joinCondition, join))
+                        mg.add((join, rr.child, Literal(f'"{colname}"')))
+                        mg.add((join, rr.parent, Literal(f'"{refcol}"')))
 
         logging.warn("\n" + mg.serialize(format="turtle"))
         return cls(mg, baseuri=baseuri)
@@ -282,8 +284,10 @@ class R2RMapping:
                     parser = parse.compile(pat.parser)
                     val = str(node.toPython()).replace(self.baseuri, "").strip()
 
-                    if parser.parse(val):
-                        fields = parser.parse(val).named
+                    parsed_val = parser.parse(val)
+                    if parsed_val:
+                        assert isinstance(parsed_val, Result)
+                        fields = parsed_val.named
                         if pat.inverse:
                             where = self.inverse_condition(pat.inverse, fields)
                             # where = literal_column(f'"{pat.tname}".{where}')
