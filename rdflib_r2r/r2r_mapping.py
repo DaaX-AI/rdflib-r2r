@@ -1,5 +1,6 @@
 import logging
 import re
+from types import NoneType
 import urllib.parse
 from dataclasses import dataclass
 import base64
@@ -30,14 +31,14 @@ def iri_unsafe(v):
     return urllib.parse.unquote(v)
 
 
-def _get_table(graph, tmap):
+def _get_table(graph:Graph, tmap:Node):
     logtable = graph.value(tmap, rr.logicalTable)
     if graph.value(logtable, rr.tableName):
-        tname = graph.value(logtable, rr.tableName).toPython()
+        tname = str(graph.value(logtable, rr.tableName))
         return table(tname.strip('"'))
     else:
         tname = f'"View_{base64.b32encode(str(tmap).encode()).decode()}"'
-        sqlquery = graph.value(logtable, rr.sqlQuery).strip().strip(";")
+        sqlquery = str(graph.value(logtable, rr.sqlQuery)).strip().strip(";")
 
         # TODO: parse views to SQLAlchemy objects to get column types
         view2obj(sqlquery)
@@ -250,7 +251,7 @@ class R2RMapping:
         t = text(inverse_expr.format(**col_replace, **param_replace))
         return t.bindparams(**field_values)
 
-    def get_node_filter(self, node, pat_maps) -> Dict[Pattern, List[ClauseElement]]:
+    def get_node_filter(self, node, pat_maps) -> Dict[Pattern|NoneType, List[ClauseElement]]:
         
         # A pattern may be used in multiple places, so use sql_or
         # (but what happens if the table name is out of scope ...? )
