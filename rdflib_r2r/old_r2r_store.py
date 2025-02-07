@@ -8,8 +8,9 @@ from types import NoneType
 from typing import Any, Generator, Iterable, Iterator, List, Optional, Tuple, Union, cast
 from rdflib import RDF, XSD, Graph, Variable
 from rdflib.term import Node, URIRef, Literal
+from rdflib_r2r.expr_template import ExpressionTemplate
 from rdflib_r2r.r2r_mapping import _get_table
-from rdflib_r2r.r2r_store import ColForm, GenerativeSelectSubForm, R2RStore, SelectSubForm, SelectVarSubForm, SubForm, sql_safe, rr
+from rdflib_r2r.r2r_store import GenerativeSelectSubForm, R2RStore, SelectSubForm, SelectVarSubForm, SubForm, sql_safe, rr
 import sqlalchemy
 import sqlalchemy.sql.operators
 from sqlalchemy import MetaData, select, text, null, literal_column, literal, TableClause, Subquery, Table, ClauseElement, Function
@@ -29,7 +30,7 @@ class OldR2RStore(R2RStore):
     def _term_map_colforms(
         cls, graph: Graph, dbtable: NamedFromClause | Subquery, parent: Node, wheres: List[ColumnElement[bool]], 
             mapper: Node, shortcut:Node, obj=False
-    ) -> Generator[tuple[ColForm, Table | NamedFromClause | Subquery], Any, Any]: 
+    ) -> Generator[tuple[ExpressionTemplate, Table | NamedFromClause | Subquery], Any, Any]: 
         """For each Triples Map, yield a expression template containing table columns.
 
         Args:
@@ -47,25 +48,25 @@ class OldR2RStore(R2RStore):
         if graph.value(parent, shortcut):
             # constant shortcut properties
             for const in graph.objects(parent,shortcut):
-                yield ColForm([f"'{const.n3()}'"], []), dbtable
+                yield ExpressionTemplate([f"'{const.n3()}'"], []), dbtable
         elif graph.value(parent, mapper):
             for tmap in graph.objects(parent,mapper):
                 if graph.value(tmap, rr.constant):
                     # constant value
                     for const in graph.objects(tmap, rr.constant):
-                        yield ColForm([f"'{const.n3()}'"], []), dbtable
+                        yield ExpressionTemplate([f"'{const.n3()}'"], []), dbtable
                 else:
                     termtype = graph.value(tmap, rr.termType) or rr.IRI
                     if graph.value(tmap, rr.column):
                         colname = graph.value(tmap, rr.column)
                         assert colname
-                        colform = ColForm.from_expr(cls._get_col(dbtable, str(colname)))
+                        colform = ExpressionTemplate.from_expr(cls._get_col(dbtable, str(colname)))
                         if obj:
                             # for objects, the default term type is Literal
                             termtype = graph.value(tmap, rr.termType) or rr.Literal
                     elif graph.value(tmap, rr.template):
                         template = graph.value(tmap, rr.template)
-                        colform = ColForm.from_template(
+                        colform = ExpressionTemplate.from_template(
                             dbtable, template, irisafe=(termtype == rr.IRI)
                         )
                     elif graph.value(tmap, rr.parentTriplesMap):
@@ -86,7 +87,7 @@ class OldR2RStore(R2RStore):
                         )
                         for colform, table in referenced_colforms:
                             cols = [c.label(None) for c in colform.cols]
-                            colform = ColForm(colform.form, cols)
+                            colform = ExpressionTemplate(colform.form, cols)
                             yield colform, table
                         continue
                     else:
@@ -95,14 +96,14 @@ class OldR2RStore(R2RStore):
                             sqltypes.VARCHAR
                         )
                         form = ["_:" + dbtable.name.replace('_ref','') + "#", None]
-                        yield ColForm(form, [rowid]), dbtable
+                        yield ExpressionTemplate(form, [rowid]), dbtable
                         continue
 
                     if termtype == rr.IRI:
                         form = ["<"] + list(colform.form) + [">"]
-                        yield ColForm(form, colform.cols), dbtable
+                        yield ExpressionTemplate(form, colform.cols), dbtable
                     elif termtype == rr.BlankNode:
-                        yield ColForm((["_:"] + list(colform.form)), colform.cols), dbtable
+                        yield ExpressionTemplate((["_:"] + list(colform.form)), colform.cols), dbtable
                     elif obj:
                         if graph.value(tmap, rr.language):
                             lang = graph.value(tmap, rr.language)
@@ -110,7 +111,7 @@ class OldR2RStore(R2RStore):
                                 sqlfunc.cast(c, sqltypes.VARCHAR) for c in colform.cols
                             ]
                             form = ['"'] + list(colform.form) + ['"@' + str(lang)]
-                            yield ColForm(form, cols), dbtable
+                            yield ExpressionTemplate(form, cols), dbtable
                         elif graph.value(tmap, rr.datatype):
                             dtype = graph.value(tmap, rr.datatype)
                             assert isinstance(dtype, URIRef)
@@ -118,13 +119,13 @@ class OldR2RStore(R2RStore):
                                 sqlfunc.cast(c, sqltypes.VARCHAR) for c in colform.cols
                             ]
                             form = ['"'] + list(colform.form) + ['"^^' + dtype.n3()]
-                            yield ColForm(form, cols), dbtable
+                            yield ExpressionTemplate(form, cols), dbtable
                         else:
                             # keep original datatype
                             yield colform, dbtable
                     else:
                         # not a real literal
-                        yield ColForm.from_expr(literal_column("'_:'")), dbtable
+                        yield ExpressionTemplate.from_expr(literal_column("'_:'")), dbtable
 
     def _triplesmap_select(self, metadata:MetaData, tmap:Node, 
             pattern:tuple[Node | None, Node | None, Node | None]) -> Generator[SelectSubForm,None,None]:
@@ -155,18 +156,18 @@ class OldR2RStore(R2RStore):
 
         gcolforms = list(
             self._term_map_colforms(mg, dbtable, s_map, [], rr.graphMap, rr.graph)
-        ) or [(ColForm.null(), dbtable)]
+        ) or [(ExpressionTemplate.null(), dbtable)]
 
         # Class Map
         if (not pfilt) or (None in pfilt) or (RDF.type == qp):
             for c in mg.objects(s_map, rr["class"]):
-                pcolform = ColForm([f"'{RDF.type.n3()}'"], [])
-                ocolform = ColForm([f"'{c.n3()}'"], [])
+                pcolform = ExpressionTemplate([f"'{RDF.type.n3()}'"], [])
+                ocolform = ExpressionTemplate([f"'{c.n3()}'"], [])
                 # no unsafe IRI because it should be defined to be safe
                 if (qo is not None) and (qo != c):
                     continue
                 for gcolform, gtable in gcolforms:
-                    subforms, cols = ColForm.to_subforms_columns(
+                    subforms, cols = ExpressionTemplate.to_subforms_columns(
                         scolform, pcolform, ocolform, gcolform
                     )
                     tables = set([stable, gtable])
@@ -195,7 +196,7 @@ class OldR2RStore(R2RStore):
             )
             gcolforms = list(
                 self._term_map_colforms(mg, dbtable, pomap, [], rr.graphMap, rr.graph)
-            ) or [(ColForm.null(), dbtable)]
+            ) or [(ExpressionTemplate.null(), dbtable)]
             for pcolform, ptable in pcolforms:
                 pstr = "".join([ str(fe) for fe in pcolform.form if fe ])
                 if (qp is not None) and pstr[1:-1] != qp.n3():
@@ -204,7 +205,7 @@ class OldR2RStore(R2RStore):
                 for ocolform, otable in ocolforms:
                     for gcolform, gtable in gcolforms:
                         where = swhere + pwhere + owhere
-                        subforms, cols = ColForm.to_subforms_columns(
+                        subforms, cols = ExpressionTemplate.to_subforms_columns(
                             scolform, pcolform, ocolform, gcolform
                         )
                         tables = set([stable, ptable, otable, gtable])
@@ -253,7 +254,7 @@ class OldR2RStore(R2RStore):
             cols = list(query.exported_columns)
             onlycols = []
             for subform, name in zip((s,p,o,g), "spog"):
-                col = ColForm.from_subform(cols, *subform).expr()
+                col = ExpressionTemplate.from_subform(cols, *subform).expr()
                 onlycols.append(col.label(name))
             queries.append(query.with_only_columns(*onlycols))
         subforms = [SubForm([i], (None,)) for i in range(4)]  # spog
@@ -338,7 +339,7 @@ class OldR2RStore(R2RStore):
             # logging.war('cols:' + str(list(cols)))
             onlycols = []
             for subform, colname in zip((s,p,o,g), "spog"):
-                col = ColForm.from_subform(cols, *subform).expr()
+                col = ExpressionTemplate.from_subform(cols, *subform).expr()
                 onlycols.append(col.label(colname))
 
             if isinstance(query, Select):
@@ -434,7 +435,7 @@ class OldR2RStore(R2RStore):
                 # Restrict selected terms from pattern query to query variables
                 cols = list(pat_query.exported_columns)
                 qvar_colform = [
-                    (q, ColForm.from_subform(cols, *subform))
+                    (q, ExpressionTemplate.from_subform(cols, *subform))
                     for q, subform in zip((qs, qp, qo), subforms)
                     if isinstance(q, Variable)
                 ]
@@ -444,7 +445,7 @@ class OldR2RStore(R2RStore):
                     table_varcolforms.setdefault(table, set()).update(qvar_colform)
                 else:
                     qvars, colforms = zip(*qvar_colform)
-                    subforms, allcols = ColForm.to_subforms_columns(*colforms)
+                    subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
                     pat_query = pat_query.with_only_columns(*allcols)
                     qvar_subform = zip(qvars, subforms)
                     query_varsubforms.append((pat_query, qvar_subform))
@@ -459,7 +460,7 @@ class OldR2RStore(R2RStore):
         # Merge simple select statements on same table
         for (table, where), var_colforms in table_varcolforms.items():
             qvars, colforms = zip(*dict(var_colforms).items())
-            subform, allcols = ColForm.to_subforms_columns(*colforms)
+            subform, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
             query = select(*allcols).select_from(table)
             if where is not None:
                 query = query.where(where)
@@ -472,10 +473,10 @@ class OldR2RStore(R2RStore):
             incols = list(subquery.c)
             for var, (idx, form) in var_subform:
                 cols = [incols[i] for i in idx]
-                var_colforms.setdefault(var, []).append(ColForm(form, cols))
+                var_colforms.setdefault(var, []).append(ExpressionTemplate(form, cols))
 
         # Simplify colform equalities
         colforms = [cfs[0] for cfs in var_colforms.values()]
-        subforms, allcols = ColForm.to_subforms_columns(*colforms)
-        where = [eq for cs in var_colforms.values() for eq in ColForm.equal(*cs)]
+        subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
+        where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
         return SelectVarSubForm(select(*allcols).where(*where), dict(zip(var_colforms, subforms)))
