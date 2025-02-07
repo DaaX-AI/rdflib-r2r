@@ -44,7 +44,7 @@ from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromCla
 from sqlalchemy.engine import Engine, Connection
 
 from rdflib_r2r.types import Triple, BGP
-from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, iri_safe, iri_unsafe
+from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, iri_safe, iri_unsafe, toPython
 
 class SubForm(NamedTuple):
     """A template for generating an RDF node from an _external_ list of SQL expressions"""
@@ -525,7 +525,7 @@ class R2RStore(Store):
                 self._term_map_colforms(mg, dbtable, pomap, [], rr.graphMap, rr.graph)
             ) or [(ColForm.null(), dbtable)]
             for pcolform, ptable in pcolforms:
-                pstr = "".join(filter(bool, pcolform.form))
+                pstr = "".join([ str(fe) for fe in pcolform.form if fe ])
                 if (qp is not None) and pstr[1:-1] != qp.n3():
                     # Filter out non-identical property patterns
                     continue
@@ -900,7 +900,7 @@ class R2RStore(Store):
         if isinstance(expr, Literal):
             return ColForm.from_expr(expr.toPython())
         if isinstance(expr, str):
-            return ColForm.from_expr(from_n3(expr).toPython())
+            return ColForm.from_expr(toPython(cast(Node,from_n3(expr))))
 
         e = f'Expr not implemented: {getattr(expr, "name", None).__repr__()} {expr}'
         raise SparqlNotImplementedError(e)
