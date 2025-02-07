@@ -8,15 +8,17 @@ import datetime
 import parse
 from string import Formatter
 
-from typing import Iterable, List, Tuple, Union, Dict
+from typing import Any, Iterable, List, Tuple, Union, Dict, cast
 
 from rdflib import Graph, URIRef, Literal, BNode
 from rdflib.term import Node
 from rdflib.namespace import RDF, XSD, Namespace
 
-from sqlalchemy import MetaData, text, table, literal_column, types as sqltypes, ColumnElement
+from sqlalchemy import MetaData, text, table, literal_column, types as sqltypes, ColumnElement, TableClause, Subquery
 from sqlalchemy import or_ as sql_or, and_ as sql_and
 from sqlalchemy.sql.expression import ClauseElement
+from sqlalchemy.sql.selectable import NamedFromClause
+from sqlalchemy.sql.elements import True_
 
 from rdflib_r2r.sql_view import view2obj
 from parse import Result
@@ -45,10 +47,20 @@ def _get_table(graph:Graph, tmap:Node):
 
         return text(sqlquery).columns().subquery(tname.strip('"'))
 
+def toPython(node:Node) -> Any:
+    if isinstance(node, Literal) or isinstance(node, URIRef):
+        return node.toPython()
+    elif isinstance(node, BNode):
+        return str(node)
+    
+TRUE_ELT = True_._singleton
 
 class R2RMapping:
     graph:Graph
     baseuri: str
+    spat_tmaps: Dict["Pattern",List[Node]] 
+    ppat_pomaps: Dict["Pattern",List[Node]]
+    opat_pomaps: Dict["Pattern",List[Node]]
 
     @dataclass(eq=True, order=True, frozen=True)
     class Pattern:
@@ -173,7 +185,7 @@ class R2RMapping:
         return template
 
     @classmethod
-    def _term_pat(cls, graph, dbtable, parent, mapper, shortcut, obj=False) -> Iterable[Pattern]:
+    def _term_pat(cls, graph:Graph, dbtable: NamedFromClause, parent:Node, mapper:URIRef, shortcut:URIRef, obj=False) -> Iterable[Pattern]:
         """Get pattern Patterns based on term mappings
 
         Args:
@@ -188,24 +200,25 @@ class R2RMapping:
         """
         if graph.value(parent, shortcut):
             # constant shortcut properties
-            for const in graph[parent:shortcut]:
-                yield cls.Pattern(const=const.toPython(), tname=dbtable.name)
+            for const in graph.objects(parent,shortcut):
+                yield cls.Pattern(const=toPython(const), tname=dbtable.name)
         elif graph.value(parent, mapper):
-            for tmap in graph[parent:mapper]:
+            for tmap in graph.objects(parent, mapper):
                 if graph.value(tmap, rr.constant):
                     # constant value
-                    for const in graph[tmap : rr.constant]:
-                        yield cls.Pattern(const=const.toPython(), tname=dbtable.name)
+                    for const in graph.objects(tmap, rr.constant):
+                        yield cls.Pattern(const=toPython(const), tname=dbtable.name)
                 else:
                     # Inverse Expression
                     inverse = None
-                    for inv_exp in graph[tmap : rr.inverseExpression]:
+                    for inv_exp in graph.objects(tmap, rr.inverseExpression):
                         inverse = cls._template_to_parser(inv_exp)
 
                     termtype = graph.value(tmap, rr.termType) or rr.IRI
                     if graph.value(tmap, rr.column):
                         col = graph.value(tmap, rr.column)
-                        col = re.sub('(^"|"$)', "", col)
+                        assert col
+                        col = re.sub('(^"|"$)', "", str(col))
                         yield cls.Pattern(field=col, inverse=inverse, tname=dbtable.name)
                     elif graph.value(tmap, rr.template):
                         template = graph.value(tmap, rr.template)
@@ -216,6 +229,7 @@ class R2RMapping:
                     elif graph.value(tmap, rr.parentTriplesMap):
                         # referencing object map
                         ref = graph.value(tmap, rr.parentTriplesMap)
+                        assert ref
                         rt = _get_table(graph, ref)
                         rt = rt.alias(f"{rt.name}_ref")
                         rs = cls._term_pat(graph, rt, ref, rr.subjectMap, rr.subject)
@@ -225,23 +239,23 @@ class R2RMapping:
                         parser = cls._template_to_parser(f"{t}#{{rowid}}")
                         yield cls.Pattern(parser=parser, inverse=inverse, tname=t)
 
-    def __init__(self, g, baseuri="http://example.com/base/"):
+    def __init__(self, g:Graph, baseuri="http://example.com/base/"):
         self.graph = g
         self.baseuri = baseuri
 
         # Track triple maps per node pattern Pattern
         self.spat_tmaps, self.ppat_pomaps, self.opat_pomaps = {}, {}, {}
-        for tmap in g[: RDF.type : rr.TriplesMap]:
+        for tmap in g.subjects(RDF.type, rr.TriplesMap):
             t = _get_table(g, tmap)
             for s_pat in self._term_pat(g, t, tmap, rr.subjectMap, rr.subject):
                 self.spat_tmaps.setdefault(s_pat, []).append(tmap)
-            for po_i, pomap in enumerate(g[tmap : rr.predicateObjectMap :]):
+            for po_i, pomap in enumerate(g.objects(tmap, rr.predicateObjectMap)):
                 for p_pat in self._term_pat(g, t, pomap, rr.predicateMap, rr.predicate):
                     self.ppat_pomaps.setdefault(p_pat, []).append(pomap)
                 for o_pat in self._term_pat(g, t, pomap, rr.objectMap, rr.object, True):
                     self.opat_pomaps.setdefault(o_pat, []).append(pomap)
 
-    def inverse_condition(self, inverse_expr: str, field_values: Dict) -> ClauseElement:
+    def inverse_condition(self, inverse_expr: str, field_values: Dict) -> ColumnElement[bool]:
         col_replace = {
             col: f'"{col}"'
             for _, col, _, _ in Formatter().parse(inverse_expr)
@@ -249,22 +263,22 @@ class R2RMapping:
         }
         param_replace = {field: ":" + field for field in field_values}
         t = text(inverse_expr.format(**col_replace, **param_replace))
-        return t.bindparams(**field_values)
+        return cast(ColumnElement[bool], t.bindparams(**field_values))
 
-    def get_node_filter(self, node, pat_maps) -> Dict[Pattern|NoneType, List[ColumnElement[bool]]]:
+    def get_node_filter(self, node:Node|None, pat_maps:Dict[Pattern,List[Node]]) -> Dict[Node|NoneType, List[ColumnElement[bool]]]:
         
         # A pattern may be used in multiple places, so use sql_or
         # (but what happens if the table name is out of scope ...? )
-        map_conditions = {}
+        map_conditions:Dict[Node,List[ColumnElement[bool]]] = {}
         if node is not None:
             for pat, maps in pat_maps.items():
                 if pat.const:
-                    if node.toPython() == pat.const:
+                    if toPython(node) == pat.const:
                         for m in maps:
                             # No condition, select all
-                            map_conditions.setdefault(m, []).append(True)
+                            map_conditions.setdefault(m, []).append(TRUE_ELT)
                 elif pat.field:
-                    val = node.toPython()
+                    val = toPython(node)
                     if isinstance(val, str):
                         # not super sure of this:
                         val = iri_unsafe(val).replace(self.baseuri, "").strip()
@@ -277,13 +291,13 @@ class R2RMapping:
                         fields = {pat.field: val}
                         where = self.inverse_condition(f'"{pat.tname}".{pat.inverse}', fields)
                     else:
-                        where = literal_column(f'"{pat.tname}"."{pat.field}"') == val
+                        where = literal_column(f'"{pat.tname}"."{pat.field}"').__eq__(val) # Not using == because of type issues
                     for m in maps:
                         if not (where is True):
                             map_conditions.setdefault(m, []).append(where)
                 elif pat.parser:
                     parser = parse.compile(pat.parser)
-                    val = str(node.toPython()).replace(self.baseuri, "").strip()
+                    val = str(toPython(node)).replace(self.baseuri, "").strip()
 
                     parsed_val = parser.parse(val)
                     if parsed_val:
@@ -304,12 +318,12 @@ class R2RMapping:
                                     val = iri_unsafe(val)
                                 clause = literal_column(key) == val
                                 where_clauses.append(clause)
-                            where = sql_and(*where_clauses) if where_clauses else True
+                            where = sql_and(*where_clauses) if where_clauses else TRUE_ELT
                         for m in maps:
                             if not (where is True):
                                 map_conditions.setdefault(m, []).append(where)
             return {
-                m: ([sql_or(*wheres)] if wheres and (wheres != [True]) else [])
+                m: ([sql_or(*wheres)] if wheres and not any(w is TRUE_ELT for w in wheres) else [])
                 for m, wheres in map_conditions.items()
             }
         else:
