@@ -12,6 +12,7 @@ The mapped SQL database as an RDF graph store object
 
 
 """
+from dataclasses import dataclass
 from os import linesep
 from types import NoneType
 from typing import Any, Generator, Generic, Iterator, Optional, Iterable, List, Tuple, Union, Dict, NamedTuple, cast, TypeVar
@@ -62,10 +63,14 @@ class GenerativeSelectSubForm(NamedTuple):
 
 SelectType = TypeVar("SelectType", bound=GenerativeSelect)
 
-class SelectVarSubForm(NamedTuple, Generic[SelectType]):
+@dataclass
+class SelectVarSubForm(Generic[SelectType]):
     select: SelectType #: 
     #: A map of RDF variables to the subforms that generate them from SQL expressions
     varsubforms: Dict[Variable, SubForm]
+
+    def as_tuple(self) -> tuple[SelectType, Dict[Variable, SubForm]]:
+        return self.select, self.varsubforms
 
 class ColForm:
     """A template object for creating SQL expressions that represent RDF nodes.
@@ -901,11 +906,11 @@ class R2RStore(Store):
         raise SparqlNotImplementedError(e)
 
     def queryFilter(self, conn: Connection, part:CompValue) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(conn, part.p)
+        part_query, var_subform = self.queryPart(conn, part.p).as_tuple()
 
         if getattr(part.expr, "name", None) == "Builtin_NOTEXISTS":
             # This is weird, but I guess that's how it is
-            query2, var_subform2 = self.queryPart(conn, part.expr.graph)
+            query2, var_subform2 = self.queryPart(conn, part.expr.graph).as_tuple()
 
             var_colforms = {}
             cols1 = list(part_query.exported_columns)
@@ -931,8 +936,8 @@ class R2RStore(Store):
             return SelectVarSubForm(part_query.where(clause), var_subform)
 
     def queryJoin(self, conn: Connection, part) -> SelectVarSubForm:
-        query1, var_subform1 = self.queryPart(conn, part.p1)
-        query2, var_subform2 = self.queryPart(conn, part.p2)
+        query1, var_subform1 = self.queryPart(conn, part.p1).as_tuple()
+        query2, var_subform2 = self.queryPart(conn, part.p2).as_tuple()
         if not query1.c:
             return SelectVarSubForm(query2, var_subform2)
         if not query2.c:
@@ -954,7 +959,7 @@ class R2RStore(Store):
     def queryAggregateJoin(self, conn: Connection, agg) -> SelectVarSubForm:
         # Assume agg.p is always a Group
         group_expr, group_part = agg.p.expr, agg.p.p
-        part_query, var_subform = self.queryPart(conn, group_part)
+        part_query, var_subform = self.queryPart(conn, group_part).as_tuple()
         cols = part_query.c
         var_cf = {v: ColForm.from_subform(cols, *sf) for v, sf in var_subform.items()}
 
@@ -972,7 +977,7 @@ class R2RStore(Store):
         return SelectVarSubForm(query, dict(zip(var_agg, subforms)))
 
     def queryExtend(self, conn: Connection, part) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(conn, part.p)
+        part_query, var_subform = self.queryPart(conn, part.p).as_tuple()
         assert isinstance(part_query, Select)  # ?
         cols = list(part_query.exported_columns)
         var_cf = {v: ColForm.from_subform(cols, *sf) for v, sf in var_subform.items()}
@@ -991,7 +996,7 @@ class R2RStore(Store):
         return SelectVarSubForm(part_query.with_only_columns(*(cols + list(cf.cols))), var_subform)
 
     def queryProject(self, conn: Connection, part) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(conn, part.p)
+        part_query, var_subform = self.queryPart(conn, part.p).as_tuple()
         var_subform = {v: sf for v, sf in var_subform.items() if v in part.PV}
         cols = list(part_query.exported_columns)
         colforms = [ColForm.from_subform(cols, *sf) for sf in var_subform.values()]
@@ -1000,7 +1005,7 @@ class R2RStore(Store):
         return SelectVarSubForm(part_query, dict(zip(var_subform, subforms)))
 
     def queryOrderBy(self, conn: Connection, part) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(conn, part.p)
+        part_query, var_subform = self.queryPart(conn, part.p).as_tuple()
         cols = list(part_query.exported_columns)
         var_cf = {v: ColForm.from_subform(cols, *sf) for v, sf in var_subform.items()}
 
@@ -1018,8 +1023,8 @@ class R2RStore(Store):
         return SelectVarSubForm(part_query.order_by(*ordering), var_subform)
 
     def queryUnion(self, conn: Connection, part) -> SelectVarSubForm:
-        query1, var_subform1 = self.queryPart(conn, part.p1)
-        query2, var_subform2 = self.queryPart(conn, part.p2)
+        query1, var_subform1 = self.queryPart(conn, part.p1).as_tuple()
+        query2, var_subform2 = self.queryPart(conn, part.p2).as_tuple()
 
         all_vars = set(var_subform1) | set(var_subform2)
 
@@ -1045,7 +1050,7 @@ class R2RStore(Store):
         return SelectVarSubForm(union_all(query1, query2), var_sf)
 
     def querySlice(self, conn: Connection, part) -> SelectVarSubForm:
-        query, var_subform = self.queryPart(conn, part.p)
+        query, var_subform = self.queryPart(conn, part.p).as_tuple()
         if part.start:
             query = query.offset(part.start)
         if part.length:
@@ -1054,8 +1059,8 @@ class R2RStore(Store):
 
     def queryLeftJoin(self, conn: Connection, part) -> SelectVarSubForm:
 
-        query1, var_subform1 = self.queryPart(conn, part.p1)
-        query2, var_subform2 = self.queryPart(conn, part.p2)
+        query1, var_subform1 = self.queryPart(conn, part.p1).as_tuple()
+        query2, var_subform2 = self.queryPart(conn, part.p2).as_tuple()
         if not query1.c:
             return SelectVarSubForm(query2, var_subform2)
         if not query2.c:
@@ -1104,11 +1109,11 @@ class R2RStore(Store):
             # no idea what this should do
             return self.queryPart(conn, part.p)
         if part.name == "Minus":
-            q1, v1 = self.queryPart(conn, part.p1)
-            q2, _ = self.queryPart(conn, part.p2)
+            q1, v1 = self.queryPart(conn, part.p1).as_tuple()
+            q2, _ = self.queryPart(conn, part.p2).as_tuple()
             return SelectVarSubForm(q1.except_(q2), v1)
         if part.name == "Distinct":
-            query, var_subform = self.queryPart(conn, part.p)
+            query, var_subform = self.queryPart(conn, part.p).as_tuple()
             return SelectVarSubForm(query.distinct(), var_subform)
         if part.name == "OrderBy":
             return self.queryOrderBy(conn, part)
@@ -1156,7 +1161,7 @@ class R2RStore(Store):
 
     def evalPart(self, part):
         with self.db.connect() as conn:
-            query, var_subform = self.queryPart(conn, part)
+            query, var_subform = self.queryPart(conn, part).as_tuple()
             query = self._apply_subforms(query, var_subform)
         return self.exec(query)
 
@@ -1167,7 +1172,7 @@ class R2RStore(Store):
         parsetree = parseQuery(sparqlQuery)
         queryobj = translateQuery(parsetree, base, initNs)
         with self.db.connect() as conn:
-            query, var_subform = self.queryPart(conn, queryobj.algebra)
+            query, var_subform = self.queryPart(conn, queryobj.algebra).as_tuple()
             sqlquery = self._apply_subforms(query, var_subform)
             return sql_pretty(sqlquery)
 
