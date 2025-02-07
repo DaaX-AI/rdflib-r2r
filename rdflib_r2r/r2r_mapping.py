@@ -185,7 +185,7 @@ class R2RMapping:
         return template
 
     @classmethod
-    def _term_pat(cls, graph:Graph, dbtable: NamedFromClause, parent:Node, mapper:URIRef, shortcut:URIRef, obj=False) -> Iterable[Pattern]:
+    def _term_pat(cls, graph:Graph, dbtable: NamedFromClause, triple_map:Node, map_property:URIRef, shortcut_property:URIRef, obj=False) -> Iterable[Pattern]:
         """Get pattern Patterns based on term mappings
 
         Args:
@@ -198,46 +198,36 @@ class R2RMapping:
         Yields:
             R2RMapping.Pattern: Node n3 pattern
         """
-        if graph.value(parent, shortcut):
-            # constant shortcut properties
-            for const in graph.objects(parent,shortcut):
-                yield cls.Pattern(const=toPython(const), tname=dbtable.name)
-        elif graph.value(parent, mapper):
-            for tmap in graph.objects(parent, mapper):
-                if graph.value(tmap, rr.constant):
-                    # constant value
-                    for const in graph.objects(tmap, rr.constant):
-                        yield cls.Pattern(const=toPython(const), tname=dbtable.name)
-                else:
-                    # Inverse Expression
-                    inverse = None
-                    for inv_exp in graph.objects(tmap, rr.inverseExpression):
-                        inverse = cls._template_to_parser(inv_exp)
+        # constant shortcut properties
+        for const in graph.objects(triple_map,shortcut_property):
+            yield cls.Pattern(const=toPython(const), tname=dbtable.name)
 
-                    termtype = graph.value(tmap, rr.termType) or rr.IRI
-                    if graph.value(tmap, rr.column):
-                        col = graph.value(tmap, rr.column)
-                        assert col
-                        col = re.sub('(^"|"$)', "", str(col))
-                        yield cls.Pattern(field=col, inverse=inverse, tname=dbtable.name)
-                    elif graph.value(tmap, rr.template):
-                        template = graph.value(tmap, rr.template)
-                        parser = cls._template_to_parser(
-                            template, irisafe=(termtype == rr.IRI)
-                        )
-                        yield cls.Pattern(parser=parser, inverse=inverse, tname=dbtable.name)
-                    elif graph.value(tmap, rr.parentTriplesMap):
-                        # referencing object map
-                        ref = graph.value(tmap, rr.parentTriplesMap)
-                        assert ref
-                        rt = _get_table(graph, ref)
-                        rt = rt.alias(f"{rt.name}_ref")
-                        rs = cls._term_pat(graph, rt, ref, rr.subjectMap, rr.subject)
-                        yield from rs
-                    else:
-                        t = dbtable.name
-                        parser = cls._template_to_parser(f"{t}#{{rowid}}")
-                        yield cls.Pattern(parser=parser, inverse=inverse, tname=t)
+        for term_map in graph.objects(triple_map, map_property):
+            for const in graph.objects(term_map, rr.constant):
+                yield cls.Pattern(const=toPython(const), tname=dbtable.name)
+
+            # Inverse Expression
+            inverse = None
+            for inv_exp in graph.objects(term_map, rr.inverseExpression):
+                inverse = cls._template_to_parser(inv_exp)
+
+            termtype = graph.value(term_map, rr.termType) or rr.IRI
+
+            for col in graph.objects(term_map, rr.column):
+                col = re.sub('(^"|"$)', "", str(col))
+                yield cls.Pattern(field=col, inverse=inverse, tname=dbtable.name)
+
+            for template in graph.objects(term_map, rr.template):
+                parser = cls._template_to_parser(
+                    template, irisafe=(termtype == rr.IRI)
+                )
+                yield cls.Pattern(parser=parser, inverse=inverse, tname=dbtable.name)
+
+            for ref in graph.objects(term_map, rr.parentTriplesMap):    
+                rt = _get_table(graph, ref)
+                rt = rt.alias(f"{rt.name}_ref")
+                rs = cls._term_pat(graph, rt, ref, rr.subjectMap, rr.subject)
+                yield from rs
 
     def __init__(self, g:Graph, baseuri="http://example.com/base/"):
         self.graph = g
