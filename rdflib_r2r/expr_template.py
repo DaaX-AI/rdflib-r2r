@@ -38,7 +38,7 @@ class SubForm(NamedTuple):
     #: RDF node template; booleans indicate whether to SQL-escape the columns
     form: Tuple[Union[str, bool, None], ...]
 
-
+NULL_SUBFORM = SubForm(tuple(), ("NULL",))
 
 class ExpressionTemplate:
     """A template object for creating SQL expressions that represent RDF nodes.

@@ -38,7 +38,7 @@ from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromCla
 
 from sqlalchemy.engine import Engine, Connection
 
-from rdflib_r2r.expr_template import ExpressionTemplate, SubForm, get_col
+from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm, get_col
 from rdflib_r2r.types import Triple, BGP
 from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython, _get_table
 
@@ -354,9 +354,9 @@ class R2RStore(Store, ABC):
 
         return SelectVarSubForm(part_query.with_only_columns(*(cols + list(cf.cols))), var_subform)
 
-    def queryProject(self, conn: Connection, part) -> SelectVarSubForm:
+    def queryProject(self, conn: Connection, part:CompValue) -> SelectVarSubForm:
         part_query, var_subform = self.queryPart(conn, part.p).as_tuple()
-        var_subform = {v: sf for v, sf in var_subform.items() if v in part.PV}
+        var_subform = {v: var_subform.get(v,None) or NULL_SUBFORM for v in part.PV }
         cols = list(part_query.exported_columns)
         colforms = [ExpressionTemplate.from_subform(cols, *sf) for sf in var_subform.values()]
         subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
