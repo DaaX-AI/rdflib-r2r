@@ -62,6 +62,16 @@ class TestR2RStore(unittest.TestCase):
                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
                    FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
 
+    def test_look_up_by_value_and_return_one_prop(self):
+        self.check(f'select ?sco {{ ?o Demo:freight 3.50; Demo:shipcountry ?sco }}',
+                   '''SELECT t0."ShipCountry" AS sco
+                   FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
+
+    def test_look_up_by_value_and_return_props(self):
+        self.check(f'select ?sco ?sci {{ ?o Demo:freight 3.50; Demo:shipcountry ?sco; Demo:shipcity ?sci }}',
+                   '''SELECT t0."ShipCountry" AS sco, t0."ShipCity" AS sci
+                   FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
+
     def test_look_up_by_value_with_class(self):
         self.check(f'select ?o {{ ?o a Demo:Orders; Demo:freight 3.50}}',
                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o

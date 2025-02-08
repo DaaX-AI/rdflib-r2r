@@ -74,6 +74,11 @@ def get_python_column_type(tab:FromClause, col_name:str) -> Optional[Type[Any]]:
     col = get_col(cast(NamedFromClause, tab), col_name)
     return col.type.python_type
 
+def expr_to_str(ex:ColumnElement):
+    return str(ex.compile(compile_kwargs={"literal_binds": True}))
+
+def same_expressions(ex1:ColumnElement, ex2:ColumnElement):
+    return expr_to_str(ex1) == expr_to_str(ex2)
 
 class NewR2rStore(R2RStore):
 
@@ -119,6 +124,8 @@ class NewR2rStore(R2RStore):
         subforms: Dict[Variable, SubForm] = {}
         select_exprs: List[ColumnElement] = []
 
+        if not resulting_states:
+            raise ValueError(f"Failed to translate to SQL: {bgp}")
         if len(resulting_states) > 1:
             raise NotImplementedError("TODO (1): Multiple BGPs are not supported yet")
         
@@ -137,9 +144,7 @@ class NewR2rStore(R2RStore):
         if not isinstance(p, URIRef):
             raise NotImplementedError("TODO (2): Only URIRef predicates are supported")
         
-        poms = self.pomaps_by_predicate.get(p, None)
-        if not poms:
-            raise ValueError("Predicate not found in the scema: "+str(p))
+        poms = self.pomaps_by_predicate.get(p, [])
         for pom in poms:
             for tm in mg.subjects(rr.predicateObjectMap, pom):
                 row = st.rows.get(s, None)
@@ -171,7 +176,10 @@ class NewR2rStore(R2RStore):
         def match_variable(node:Variable, expr: ColumnElement) -> Generator[ProcessingState, None, None]:
             vex = st.var_expressions.get(node, None)
             if vex is not None:
-                yield replace(st, wheres=st.wheres + [vex == expr])
+                if same_expressions(expr,vex):
+                    yield st
+                else:
+                    yield replace(st, wheres=st.wheres + [vex == expr])
             else:
                 yield replace(st, var_expressions={**st.var_expressions, node: expr})
 
