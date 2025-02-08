@@ -57,6 +57,16 @@ class TestR2RStore(unittest.TestCase):
         self.check(f'select (1 as ?k) {{ <{OD_NS}1> Demo:freight 3.50}}',
                    'SELECT 1 AS k\nFROM "Orders" AS t0\nWHERE t0."OrderID" = 1 AND t0."Freight" = 3.50')
 
+    def test_look_up_by_value_without_class(self):
+        self.check(f'select ?o {{ ?o Demo:freight 3.50}}',
+                   '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
+                   FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
+
+    def test_look_up_by_value_with_class(self):
+        self.check(f'select ?o {{ ?o a Demo:Orders; Demo:freight 3.50}}',
+                   '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
+                   FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

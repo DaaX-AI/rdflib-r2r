@@ -153,18 +153,6 @@ class NewR2rStore(R2RStore):
                         for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
                             yield replace(st3, triples=st3.triples[1:])
 
-        # row = rows.get(s,None)
-        # if not row:
-        #     rows = {**rows}
-        #     for tm, wheres in self.mapping.get_node_filter(s, self.mapping.spat_tmaps).items():
-        #         if tm:
-        #             tab = _get_table(self.mapping.graph, tm)
-        #             row = Row(s, tab, "t"+str(len(rows)))
-        #             yield replace(st, rows={**rows, s: row}, wheres=st.wheres + wheres)
-        #         else:
-        #             raise NotImplementedError("TODO (1): Variable subjects not implemented")
-        #     return
-
     def match_node_to_term_map(self, node:Node, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
                 tab:NamedFromClause) -> Generator[ProcessingState, None, None]:
         mg = self.mapping.graph
