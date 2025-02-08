@@ -8,9 +8,9 @@ from types import NoneType
 from typing import Any, Generator, Iterable, Iterator, List, Optional, Tuple, Union, cast
 from rdflib import RDF, XSD, Graph, Variable
 from rdflib.term import Node, URIRef, Literal
-from rdflib_r2r.expr_template import ExpressionTemplate
+from rdflib_r2r.expr_template import ExpressionTemplate, SubForm, sql_safe
 from rdflib_r2r.r2r_mapping import _get_table
-from rdflib_r2r.r2r_store import GenerativeSelectSubForm, R2RStore, SelectSubForm, SelectVarSubForm, SubForm, sql_safe, rr
+from rdflib_r2r.r2r_store import GenerativeSelectSubForm, R2RStore, SelectSubForm, SelectVarSubForm, rr
 import sqlalchemy
 import sqlalchemy.sql.operators
 from sqlalchemy import MetaData, select, text, null, literal_column, literal, TableClause, Subquery, Table, ClauseElement, Function
@@ -22,15 +22,16 @@ from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromCla
 from sqlalchemy.engine import Engine, Connection
 from rdflib_r2r.types import BGP, Triple
 from rdflib.util import from_n3
-
+from rdflib_r2r.expr_template import get_col
 
 class OldR2RStore(R2RStore):
 
+    
     @classmethod
     def _term_map_colforms(
-        cls, graph: Graph, dbtable: NamedFromClause | Subquery, parent: Node, wheres: List[ColumnElement[bool]], 
+        cls, graph: Graph, dbtable: NamedFromClause, parent: Node, wheres: List[ColumnElement[bool]], 
             mapper: Node, shortcut:Node, obj=False
-    ) -> Generator[tuple[ExpressionTemplate, Table | NamedFromClause | Subquery], Any, Any]: 
+    ) -> Generator[tuple[ExpressionTemplate, NamedFromClause], Any, Any]: 
         """For each Triples Map, yield a expression template containing table columns.
 
         Args:
@@ -48,19 +49,19 @@ class OldR2RStore(R2RStore):
         if graph.value(parent, shortcut):
             # constant shortcut properties
             for const in graph.objects(parent,shortcut):
-                yield ExpressionTemplate([f"'{const.n3()}'"], []), dbtable
+                yield ExpressionTemplate.from_string(f"'{const.n3()}'"), dbtable
         elif graph.value(parent, mapper):
             for tmap in graph.objects(parent,mapper):
                 if graph.value(tmap, rr.constant):
                     # constant value
                     for const in graph.objects(tmap, rr.constant):
-                        yield ExpressionTemplate([f"'{const.n3()}'"], []), dbtable
+                        yield ExpressionTemplate.from_string(f"'{const.n3()}'"), dbtable
                 else:
                     termtype = graph.value(tmap, rr.termType) or rr.IRI
                     if graph.value(tmap, rr.column):
                         colname = graph.value(tmap, rr.column)
                         assert colname
-                        colform = ExpressionTemplate.from_expr(cls._get_col(dbtable, str(colname)))
+                        colform = ExpressionTemplate.from_expr(get_col(dbtable, str(colname)))
                         if obj:
                             # for objects, the default term type is Literal
                             termtype = graph.value(tmap, rr.termType) or rr.Literal

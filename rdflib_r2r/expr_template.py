@@ -1,10 +1,9 @@
-from rdflib_r2r.r2r_store import R2RStore, SubForm, sql_safe
-
 
 import sqlalchemy.sql.operators
-from sqlalchemy import and_ as sql_and, func as sqlfunc, literal_column, null, or_ as sql_or, types as sqltypes
+from sqlalchemy import and_ as sql_and, func as sqlfunc, literal_column, null, or_ as sql_or, types as sqltypes, ColumnClause, Function, Table
 from sqlalchemy.sql.expression import ColumnElement
-
+from sqlalchemy.sql.selectable import NamedFromClause
+from sqlalchemy.sql import ColumnCollection
 
 import functools
 import logging
@@ -13,7 +12,31 @@ import re
 from collections import Counter
 from string import Formatter
 from types import NoneType
-from typing import Generator, Iterable, List, Tuple, Union, cast
+from typing import Generator, Iterable, List, NamedTuple, Sequence, Tuple, Union, cast
+
+
+def sql_safe(literal):
+    # return "<ENCODE>" + sqlfunc.cast(literal, sqltypes.VARCHAR) + "</ENCODE>"
+    # This is a terrible idea due to the large number of chars.
+    # ... but the alternative messes up SPARQL query rewriting
+
+    # TEMP: DISABLE FOR DEBUGGING
+    literal = sqlfunc.replace(literal, " ", "%20")
+    literal = sqlfunc.replace(literal, "/", "%2F")
+    literal = sqlfunc.replace(literal, "(", "%28")
+    literal = sqlfunc.replace(literal, ")", "%29")
+    literal = sqlfunc.replace(literal, ",", "%2C")
+    literal = sqlfunc.replace(literal, ":", "%3A")
+
+    return literal
+
+
+class SubForm(NamedTuple):
+    """A template for generating an RDF node from an _external_ list of SQL expressions"""
+    #: Offsets of variables in a SQL Select statement to use in RDF node template
+    select_var_indices: Iterable[int]
+    #: RDF node template; booleans indicate whether to SQL-escape the columns
+    form: Tuple[Union[str, bool, None], ...]
 
 
 
@@ -89,14 +112,14 @@ class ExpressionTemplate:
             if prefix != "":
                 form.append(prefix)
             if colname:
-                col = R2RStore._get_col(dbtable, colname, template=True)
+                col = get_col(dbtable, colname, template=True)
                 form.append(irisafe)
                 cols.append(col)
 
         return cls(form, cols)
 
     @classmethod
-    def from_subform(cls, cols, idxs, form) -> "ExpressionTemplate":
+    def from_subform(cls, cols:Sequence[ColumnElement]|ColumnCollection, idxs:Iterable[int], form:Tuple[Union[str, bool, NoneType],...]) -> "ExpressionTemplate":
         """A subform is a tuple of (external indexes, form sequence of strings) """
         cols = list(cols)
         return cls(form, [cols[i] for i in idxs])
@@ -104,6 +127,10 @@ class ExpressionTemplate:
     @classmethod
     def from_expr(cls, expr:ColumnElement) -> "ExpressionTemplate":
         return cls([None], [expr])
+    
+    @classmethod
+    def from_string(cls, expr:str) -> "ExpressionTemplate":
+        return cls([expr], [])
 
     @classmethod
     def null(cls) -> "ExpressionTemplate":
@@ -156,3 +183,24 @@ class ExpressionTemplate:
             op = sqlalchemy.sql.operators.custom_op(opstr, is_comparison=True)
             # TODO: fancy type casting
             return cls.from_expr(op(cf1.expr(), cf2.expr()))
+        
+def get_col(dbtable:NamedFromClause, colname:str, template=False) -> ColumnClause|Function:
+    if type(dbtable) is Table:
+        dbcol = dbtable.c[colname.strip('"')]
+
+        if isinstance(dbcol.type, sqltypes.Numeric):
+            if dbcol.type.precision:
+                if template:
+                    # Binary data
+                    return sqlfunc.hex(dbcol)
+                else:
+                    return literal_column(f'"{dbtable.name}".{colname}')
+
+        if (not template) and isinstance(dbcol.type, sqltypes.CHAR):
+            if dbcol.type.length:
+                l = dbcol.type.length
+                return sqlfunc.substr(dbcol + " " * l, 1, l)
+
+        return dbcol
+    else:
+        return literal_column(f'"{dbtable.name}".{colname}')

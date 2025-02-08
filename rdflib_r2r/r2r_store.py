@@ -15,7 +15,7 @@ The mapped SQL database as an RDF graph store object
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from os import linesep
-from typing import Generic, Iterator, Optional, Iterable, List, Tuple, Union, Dict, NamedTuple, cast, TypeVar
+from typing import Any, Generator, Generic, Iterator, Mapping, Optional, List, Union, Dict, NamedTuple, cast, TypeVar
 import logging
 import base64
 from decimal import Decimal
@@ -30,7 +30,7 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import MetaData, select, text, null, literal_column, literal, TableClause, Subquery, Table, ClauseElement, Function
+from sqlalchemy import MetaData, select, text, null, literal_column, ColumnElement
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import schema as sqlschema, types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import GenerativeSelect, Select, ColumnClause
@@ -38,16 +38,9 @@ from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromCla
 
 from sqlalchemy.engine import Engine, Connection
 
-from rdflib_r2r.expr_template import ExpressionTemplate
+from rdflib_r2r.expr_template import ExpressionTemplate, SubForm, get_col
 from rdflib_r2r.types import Triple, BGP
-from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
-
-class SubForm(NamedTuple):
-    """A template for generating an RDF node from an _external_ list of SQL expressions"""
-    #: Offsets of variables in a SQL Select statement to use in RDF node template
-    select_var_indices: Iterable[int]
-    #: RDF node template; booleans indicate whether to SQL-escape the columns
-    form: Tuple[Union[str, bool, None], ...]
+from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython, _get_table
 
 class SelectSubForm(NamedTuple):
     select: Select #: 
@@ -111,22 +104,6 @@ XSDToSQL = {
 }
 
 
-def sql_safe(literal):
-    # return "<ENCODE>" + sqlfunc.cast(literal, sqltypes.VARCHAR) + "</ENCODE>"
-    # This is a terrible idea due to the large number of chars.
-    # ... but the alternative messes up SPARQL query rewriting
-
-    # TEMP: DISABLE FOR DEBUGGING
-    literal = sqlfunc.replace(literal, " ", "%20")
-    literal = sqlfunc.replace(literal, "/", "%2F")
-    literal = sqlfunc.replace(literal, "(", "%28")
-    literal = sqlfunc.replace(literal, ")", "%29")
-    literal = sqlfunc.replace(literal, ",", "%2C")
-    literal = sqlfunc.replace(literal, ":", "%3A")
-
-    return literal
-
-
 def sql_pretty(query):
     import sqlparse
 
@@ -185,29 +162,6 @@ class R2RStore(Store, ABC):
         iri = iri_n3[1:-1]
         uri = re.sub("<ENCODE>(.+?)</ENCODE>", lambda x: iri_safe(x.group(1)), iri)
         return URIRef(uri, base=self.base)
-
-    @staticmethod
-    def _get_col(dbtable:Table|NamedFromClause, colname:str, template=False) -> ColumnClause|Function:
-        if type(dbtable) is sqlschema.Table:
-            dbcol = dbtable.c[colname.strip('"')]
-
-            if isinstance(dbcol.type, sqltypes.Numeric):
-                if dbcol.type.precision:
-                    if template:
-                        # Binary data
-                        return sqlfunc.hex(dbcol)
-                    else:
-                        return literal_column(f'"{dbtable.name}".{colname}')
-
-            if (not template) and isinstance(dbcol.type, sqltypes.CHAR):
-                if dbcol.type.length:
-                    l = dbcol.type.length
-                    return sqlfunc.substr(dbcol + " " * l, 1, l)
-
-            return dbcol
-        else:
-            return literal_column(f'"{dbtable.name}".{colname}')
-
 
     def make_node(self, val):
         isstr = isinstance(val, str)
@@ -550,7 +504,7 @@ class R2RStore(Store, ABC):
                 yield dict(zip(keys, [self.make_node(v) for v in vals]))
 
     @staticmethod
-    def _apply_subforms(query, var_subform):
+    def _apply_subforms(query:Select, var_subform: Dict[Variable, SubForm]) -> Select:
         if isinstance(query, Select):
             cols = [
                 ExpressionTemplate.from_subform(query.exported_columns, *sf).expr().label(str(var))
@@ -564,13 +518,13 @@ class R2RStore(Store, ABC):
             ]
             return select(*cols)
 
-    def evalPart(self, part):
+    def evalPart(self, part:CompValue):
         with self.db.connect() as conn:
             query, var_subform = self.queryPart(conn, part).as_tuple()
             query = self._apply_subforms(query, var_subform)
         return self.exec(query)
 
-    def getSQL(self, sparqlQuery, base=None, initNs={}):
+    def getSQL(self, sparqlQuery, base:str|None=None, initNs:Mapping[str, Any] | None={}):
         from rdflib.plugins.sparql.parser import parseQuery
         from rdflib.plugins.sparql.algebra import translateQuery
 
