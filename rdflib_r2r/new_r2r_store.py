@@ -143,16 +143,31 @@ class NewR2rStore(R2RStore):
         assert o
         if not isinstance(p, URIRef):
             raise NotImplementedError("TODO (2): Only URIRef predicates are supported")
-        
+
+        def get_row(triple_map:Node):
+            nonlocal st
+            row = st.rows.get(s, None)
+            if not row:
+                tab = _get_table(mg, triple_map)
+                tab = self.metadata.tables[tab.name]
+                row = Row(subject=s, table=tab.alias("t"+str(len(st.rows))))
+                st = replace(st, rows={**st.rows, s: row})
+
+            return row
+
+        if p == RDF.type:
+            if isinstance(o, Variable):
+                raise NotImplementedError("TODO (2): retrieving types not supported")
+            for sm in mg.subjects(rr['class'], o):
+                for tm in mg.subjects(rr.subjectMap, sm):
+                    row = get_row(tm)
+                    for st1 in self.match_node_to_term_map(s, tm, "S", st, row.table):
+                        yield replace(st1, triples=st1.triples[1:])
+                        
         poms = self.pomaps_by_predicate.get(p, [])
         for pom in poms:
             for tm in mg.subjects(rr.predicateObjectMap, pom):
-                row = st.rows.get(s, None)
-                if not row:
-                    tab = _get_table(mg, tm)
-                    tab = self.metadata.tables[tab.name]
-                    row = Row(subject=s, table=tab.alias("t"+str(len(st.rows))))
-                    st = replace(st, rows={**st.rows, s: row})
+                row = get_row(tm)
                 for st1 in self.match_node_to_term_map(s, tm, "S", st, row.table):
                     for st2 in self.match_node_to_term_map(o, pom, "O", st1, row.table):
                         for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
