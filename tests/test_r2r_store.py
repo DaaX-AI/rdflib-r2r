@@ -110,6 +110,19 @@ class TestR2RStore(unittest.TestCase):
         self.check(f'select ?o {{ ?o a Demo:Orders; Demo:freight ?fr. filter(?fr < 3.50) }}',
                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
                    FROM "Orders" AS t0\nWHERE t0."Freight" < 3.50''')
+        
+    def test_union(self):
+        self.check('''select ?person { 
+                   { ?person a Demo:Employees } UNION { ?person a Demo:Customers }
+                   }''',
+            '''SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as person FROM "Employees" AS t0
+            UNION SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0''')
+
+    def test_shared_prop(self):
+        self.check('''select ?o { ?o Demo:city "Atlanta"}''',
+                   '''SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") as o FROM "Customers" AS t0 WHERE t0."City" = 'Atlanta'
+                   UNION SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as o FROM "Employees" AS t0 WHERE t0."City" = 'Atlanta'
+                   UNION SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0 WHERE t0."City" = 'Atlanta' ''')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

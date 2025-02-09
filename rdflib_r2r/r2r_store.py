@@ -15,14 +15,12 @@ The mapped SQL database as an RDF graph store object
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from os import linesep
-from typing import Any, Generator, Generic, Iterator, Mapping, Optional, List, Union, Dict, NamedTuple, cast, TypeVar
+from typing import Any, Generic, Mapping, Optional, List, Dict, NamedTuple, cast, TypeVar, overload
 import logging
 import base64
-from decimal import Decimal
 import re
-import math
 
-from rdflib import Graph, URIRef, Literal, BNode, Variable
+from rdflib import URIRef, Literal, BNode, Variable
 from rdflib.namespace import XSD, Namespace
 from rdflib.store import Store
 from rdflib.util import from_n3
@@ -30,17 +28,16 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import MetaData, select, text, null, literal_column, ColumnElement
+from sqlalchemy import select, null, literal_column
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
-from sqlalchemy import schema as sqlschema, types as sqltypes, func as sqlfunc
-from sqlalchemy.sql.expression import GenerativeSelect, Select, ColumnClause
-from sqlalchemy.sql.selectable import ScalarSelect, CompoundSelect, NamedFromClause
+from sqlalchemy import types as sqltypes, func as sqlfunc
+from sqlalchemy.sql.expression import GenerativeSelect, Select
 
 from sqlalchemy.engine import Engine, Connection
 
-from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm, get_col
+from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm
 from rdflib_r2r.types import Triple, BGP
-from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython, _get_table
+from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
 
 class SelectSubForm(NamedTuple):
     select: Select #: 
@@ -110,6 +107,50 @@ def sql_pretty(query):
     qstr = str(query.compile(compile_kwargs={"literal_binds": True}))
     return sqlparse.format(qstr, reindent=True, keyword_case="upper")
 
+
+@overload
+def results_union(result1:None, result2: None) -> None:
+    ...
+
+@overload
+def results_union(result1:SelectVarSubForm, result2: SelectVarSubForm|None) -> SelectVarSubForm:
+    ...
+
+@overload
+def results_union(result1:None, result2: SelectVarSubForm) -> SelectVarSubForm:
+    ...
+
+def results_union(result1:SelectVarSubForm|None, result2: SelectVarSubForm|None):
+    if result2 is None:
+        return result1
+    if result1 is None:
+        return result2
+
+    query1, var_subform1 = result1.as_tuple()
+    query2, var_subform2 = result2.as_tuple()
+
+    all_vars = set(var_subform1) | set(var_subform2)
+
+    cols1, cols2 = list(query1.c), list(query2.c)
+    allcols1, allcols2 = [], []
+    var_sf: Dict[Variable,SubForm] = {}
+    for i, v in enumerate(all_vars):
+        # TODO: if forms are identical, don't convert to expression
+        var_sf[v] = SubForm([i], (None,))
+        if v in var_subform1:
+            e1 = ExpressionTemplate.from_subform(cols1, *var_subform1[v]).expr()
+        else:
+            e1 = null()
+        allcols1.append(e1.label(str(v)))
+        if v in var_subform2:
+            e2 = ExpressionTemplate.from_subform(cols2, *var_subform2[v]).expr()
+        else:
+            e2 = null()
+        allcols2.append(e2.label(str(v)))
+    query1 = select(*allcols1)
+    query2 = select(*allcols2)
+
+    return SelectVarSubForm(union_all(query1, query2), var_sf)
 
 class R2RStore(Store, ABC):
     """
@@ -382,31 +423,7 @@ class R2RStore(Store, ABC):
         return SelectVarSubForm(part_query.order_by(*ordering), var_subform)
 
     def queryUnion(self, conn: Connection, part) -> SelectVarSubForm:
-        query1, var_subform1 = self.queryPart(conn, part.p1).as_tuple()
-        query2, var_subform2 = self.queryPart(conn, part.p2).as_tuple()
-
-        all_vars = set(var_subform1) | set(var_subform2)
-
-        cols1, cols2 = list(query1.c), list(query2.c)
-        allcols1, allcols2 = [], []
-        var_sf = {}
-        for i, v in enumerate(all_vars):
-            # TODO: if forms are identical, don't convert to expression
-            var_sf[v] = [i], [None]
-            if v in var_subform1:
-                e1 = ExpressionTemplate.from_subform(cols1, *var_subform1[v]).expr()
-            else:
-                e1 = null()
-            allcols1.append(e1.label(str(v)))
-            if v in var_subform2:
-                e2 = ExpressionTemplate.from_subform(cols2, *var_subform2[v]).expr()
-            else:
-                e2 = null()
-            allcols2.append(e2.label(str(v)))
-        query1 = select(*allcols1)
-        query2 = select(*allcols2)
-
-        return SelectVarSubForm(union_all(query1, query2), var_sf)
+        return results_union(self.queryPart(conn, part.p1), self.queryPart(conn, part.p2))
 
     def querySlice(self, conn: Connection, part) -> SelectVarSubForm:
         query, var_subform = self.queryPart(conn, part.p).as_tuple()
