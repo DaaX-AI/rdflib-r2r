@@ -8,7 +8,7 @@ from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional,
 from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable
 from rdflib.term import Node
 from rdflib.paths import AlternativePath, SequencePath, InvPath
-from sqlalchemy import types as sqltypes, MetaData
+from sqlalchemy import CompoundSelect, types as sqltypes, MetaData
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.sql import Select, ColumnElement, select, literal_column, literal, func as sqlfunc
 from sqlalchemy.sql.selectable import NamedFromClause, FromClauseAlias, FromClause
@@ -111,7 +111,7 @@ class NewR2rStore(R2RStore):
         self.metadata.reflect(db)
 
             
-    def queryBGP(self, conn: Connection, bgp: BGP) -> SelectVarSubForm:
+    def queryBGP(self, conn: Connection, bgp: BGP) -> SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]:
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
@@ -127,7 +127,7 @@ class NewR2rStore(R2RStore):
                 else:
                     q.put(nst)
 
-        full_result = None
+        full_result:SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]|None = None
         for rs in resulting_states:
             subforms: Dict[Variable, SubForm] = {}
             select_exprs: List[ColumnElement] = []

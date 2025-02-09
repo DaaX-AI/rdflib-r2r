@@ -41,6 +41,7 @@ class TestR2RStore(unittest.TestCase):
     def setUp(self):
         TestR2RStore.setup_db(self)
         self.store = NewR2rStore(self.db, self.mapping)
+        self.maxDiff = None
 
     def check(self, sparql:str, expected_sql:str|None):
         # print("SPARQL:", sparql)
