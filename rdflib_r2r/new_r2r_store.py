@@ -140,7 +140,11 @@ class NewR2rStore(R2RStore):
         for i, (var, expr) in enumerate(rs.var_expressions.items()):
             select_exprs.append(expr)
             subforms[var] = SubForm([i], ExpressionTemplate.from_expr(expr).form)
-        return SelectVarSubForm(select(*select_exprs).where(sql_and(*rs.wheres)), subforms)
+            
+        result = select(*select_exprs)
+        if rs.wheres:
+            result = result.where(sql_and(*rs.wheres))
+        return SelectVarSubForm(result, subforms)
     
     def get_row(self, st:ProcessingState, s:Node, triple_map:Node) -> tuple[Row,ProcessingState]:
         row = st.rows.get(s, None)

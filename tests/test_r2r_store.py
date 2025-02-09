@@ -94,7 +94,10 @@ class TestR2RStore(unittest.TestCase):
                    FROM "Shippers" AS t0, "Orders" AS t1 
                    WHERE t0."ShipperID" = t1."ShipVia"''')
         
-
+    def test_filter(self):
+        self.check(f'select ?o {{ ?o a Demo:Orders; Demo:freight ?fr. filter(?fr < 3.50) }}',
+                   '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
+                   FROM "Orders" AS t0\nWHERE t0."Freight" < 3.50''')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

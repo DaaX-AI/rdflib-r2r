@@ -284,9 +284,9 @@ class R2RStore(Store, ABC):
 
         cols = list(getattr(part_query, "exported_columns", part_query.c))
         var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
-        logging.warn(('Building filter clause from', part.expr, var_cf))
+        logging.warning(('Building filter clause from', part.expr, var_cf))
         clause = self.queryExpr(conn, part.expr, var_cf).expr()
-        logging.warn(('Built filter clause', str(clause.compile())))
+        logging.warning(('Built filter clause', str(clause.compile())))
 
         # Filter should be HAVING for aggregates
         if part.p.name == "AggregateJoin":
@@ -490,16 +490,16 @@ class R2RStore(Store, ABC):
 
     def exec(self, query):
         with self.db.connect() as conn:
-            logging.warn("Executing:\n" + sql_pretty(query))
+            logging.warning("Executing:\n" + sql_pretty(query))
             # raise Exception
             results = conn.execute(query)
             rows = list(results)
             keys = [Variable(v) for v in results.keys()]
-            logging.warn(f"Got {len(rows)} rows of {keys}")
+            logging.warning(f"Got {len(rows)} rows of {keys}")
             first = True
             for vals in rows:
                 if first:
-                    logging.warn(f"First row: {vals}")
+                    logging.warning(f"First row: {vals}")
                     first = False
                 yield dict(zip(keys, [self.make_node(v) for v in vals]))
 
