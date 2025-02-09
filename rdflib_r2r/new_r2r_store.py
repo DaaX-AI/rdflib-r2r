@@ -262,4 +262,5 @@ class NewR2rStore(R2RStore):
                     assert parentColumn
                     wheres.append(get_col(tab, str(childColumn)) == get_col(jrow.table, str(parentColumn)))
 
-                yield replace(jrst, wheres = jrst.wheres + wheres)
+                jrst = replace(jrst, wheres = jrst.wheres + wheres)
+                yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)

@@ -88,6 +88,18 @@ class TestR2RStore(unittest.TestCase):
                    FROM "Shippers" AS t0, "Orders" AS t1 
                    WHERE t0."ShipperID" = t1."ShipVia"''')
 
+    def test_join_two_iris(self):
+        self.check('''select ?sh ?o { ?sh Demo:shippers_of_orders ?o }''',
+                   '''SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS sh, concat('http://localhost:8890/Demo/orders/', t1."OrderID") AS o
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia"''')
+
+    def test_join_two_iris_second_const(self):
+        self.check('''select ?sh  { ?sh Demo:shippers_of_orders <http://localhost:8890/Demo/orders/1> }''',
+                   '''SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS sh
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia" AND t1."OrderID" = 1''')
+
     def test_join_with_where(self):
         self.check('''select ?shid ?d ?fr { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders ?o. ?o Demo:shippeddate ?d; Demo:freight ?fr. }''',
                    '''SELECT t0."ShipperID" AS shid, t1."ShippedDate" AS d, t1."Freight" AS fr 
