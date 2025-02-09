@@ -111,7 +111,7 @@ class NewR2rStore(R2RStore):
         self.metadata.reflect(db)
 
             
-    def queryBGP(self, conn: Connection, bgp: BGP) -> SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]:
+    def queryBGP(self, bgp: BGP) -> SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]:
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
