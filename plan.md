@@ -1,7 +1,8 @@
 ### R2RML mapping.
 
 - [v] Mapping for rdf:type.
-- [ ] Support for joins.
+- [v] Support for joins (explicit via parentTriplesMap, e.g. shippers_of_order).
+- [ ] Support for joins (implicit via matching templates, e.g. orders_has_customers)
 - [ ] Support for properties with multiple domains (e.g., Demo:city)
 - [ ] Support for paths.
 

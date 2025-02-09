@@ -27,11 +27,11 @@ class TestR2RStore(unittest.TestCase):
     def setup_db(target:"TestR2RStore|Type[TestR2RStore]"):
         target.db = create_engine("sqlite+pysqlite:///:memory:")
         target.conn = target.db.connect()
-        with open('tests/data/Northwind.sql') as f:
+        with open('tests/northwind/Northwind.sql') as f:
             for stmt in f.read().split(';'):
                 target.conn.execute(text(stmt))
         r2rg = Graph()
-        r2rg.parse('tests/data/NorthwindR2RML.ttl')
+        r2rg.parse('tests/northwind/NorthwindR2RML.ttl')
         target.mapping = R2RMapping(r2rg)
         target.ns_map = {}
         for prefix, ns in r2rg.namespaces():
@@ -61,7 +61,7 @@ class TestR2RStore(unittest.TestCase):
         self.check(f'select ?o {{ ?o Demo:freight 3.50}}',
                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
                    FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
-
+        
     def test_look_up_by_value_and_return_one_prop(self):
         self.check(f'select ?sco {{ ?o Demo:freight 3.50; Demo:shipcountry ?sco }}',
                    '''SELECT t0."ShipCountry" AS sco
@@ -76,6 +76,24 @@ class TestR2RStore(unittest.TestCase):
         self.check(f'select ?o {{ ?o a Demo:Orders; Demo:freight 3.50}}',
                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
                    FROM "Orders" AS t0\nWHERE t0."Freight" = 3.50''')
+        
+    def test_shipped_same_day(self):
+        self.check('select ?o { ?o a Demo:Orders; Demo:shippeddate ?d; Demo:orderdate ?d. }',
+                    '''SELECT concat('http://localhost:8890/Demo/orders/', t0."OrderID") AS o
+                    FROM "Orders" AS t0 WHERE t0."OrderDate" = t0."ShippedDate"''')
+
+    def test_join(self):
+        self.check('''select ?shid ?fr { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders ?o. ?o Demo:freight ?fr. }''',
+                   '''SELECT t0."ShipperID" AS shid, t1."Freight" AS fr 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia"''')
+
+    def test_join_with_where(self):
+        self.check('''select ?shid ?d ?fr { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders ?o. ?o Demo:shippeddate ?d; Demo:freight ?fr. }''',
+                   '''SELECT t0."ShipperID" AS shid, t1."ShippedDate" AS d, t1."Freight" AS fr 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia"''')
+        
 
 
 if __name__ == '__main__':

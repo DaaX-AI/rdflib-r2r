@@ -5,7 +5,7 @@ import logging
 import re
 from string import Formatter
 from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
-from rdflib import RDF, URIRef, Variable
+from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable
 from rdflib.term import Node
 from rdflib.paths import AlternativePath, SequencePath, InvPath
 from sqlalchemy import types as sqltypes, MetaData
@@ -80,6 +80,14 @@ def expr_to_str(ex:ColumnElement):
 def same_expressions(ex1:ColumnElement, ex2:ColumnElement):
     return expr_to_str(ex1) == expr_to_str(ex2)
 
+def n3(nd:Node|None|tuple[Node|None,Node|None,Node|None], g:Graph|None = None):
+    if isinstance(nd, tuple):
+        s,p,o = nd
+        return "("+" ".join([n3(s,g), n3(p,g), n3(o,g)])+")"
+    if isinstance(nd, (IdentifiedNode,Variable)):
+        return nd.n3(g.namespace_manager if g is not None else None)
+    else:
+        return str(nd)
 class NewR2rStore(R2RStore):
 
     pomaps_by_predicate: Dict[URIRef|None, List[Node]]
@@ -104,7 +112,6 @@ class NewR2rStore(R2RStore):
 
             
     def queryBGP(self, conn: Connection, bgp: BGP) -> SelectVarSubForm:
-
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
@@ -125,7 +132,7 @@ class NewR2rStore(R2RStore):
         select_exprs: List[ColumnElement] = []
 
         if not resulting_states:
-            raise ValueError(f"Failed to translate to SQL: {bgp}")
+            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping.graph) for t in bgp]}")
         if len(resulting_states) > 1:
             raise NotImplementedError("TODO (1): Multiple BGPs are not supported yet")
         
@@ -134,6 +141,16 @@ class NewR2rStore(R2RStore):
             select_exprs.append(expr)
             subforms[var] = SubForm([i], ExpressionTemplate.from_expr(expr).form)
         return SelectVarSubForm(select(*select_exprs).where(sql_and(*rs.wheres)), subforms)
+    
+    def get_row(self, st:ProcessingState, s:Node, triple_map:Node) -> tuple[Row,ProcessingState]:
+        row = st.rows.get(s, None)
+        if not row:
+            tab = _get_table(self.mapping.graph, triple_map)
+            tab = self.metadata.tables[tab.name]
+            row = Row(subject=s, table=tab.alias("t"+str(len(st.rows))))
+            st = replace(st, rows={**st.rows, s: row})
+        #TODO: check that it's the same table
+        return row, st
 
     def process_next_triple(self, st: ProcessingState) -> Generator[ProcessingState, None, None]:
         mg = self.mapping.graph
@@ -144,31 +161,20 @@ class NewR2rStore(R2RStore):
         if not isinstance(p, URIRef):
             raise NotImplementedError("TODO (2): Only URIRef predicates are supported")
 
-        def get_row(triple_map:Node):
-            nonlocal st
-            row = st.rows.get(s, None)
-            if not row:
-                tab = _get_table(mg, triple_map)
-                tab = self.metadata.tables[tab.name]
-                row = Row(subject=s, table=tab.alias("t"+str(len(st.rows))))
-                st = replace(st, rows={**st.rows, s: row})
-
-            return row
-
         if p == RDF.type:
             if isinstance(o, Variable):
                 raise NotImplementedError("TODO (2): retrieving types not supported")
             for sm in mg.subjects(rr['class'], o):
                 for tm in mg.subjects(rr.subjectMap, sm):
-                    row = get_row(tm)
-                    for st1 in self.match_node_to_term_map(s, tm, "S", st, row.table):
+                    row, stR = self.get_row(st, s, tm)
+                    for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
                         yield replace(st1, triples=st1.triples[1:])
-                        
+
         poms = self.pomaps_by_predicate.get(p, [])
         for pom in poms:
             for tm in mg.subjects(rr.predicateObjectMap, pom):
-                row = get_row(tm)
-                for st1 in self.match_node_to_term_map(s, tm, "S", st, row.table):
+                row, stR = self.get_row(st, s, tm)
+                for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
                     for st2 in self.match_node_to_term_map(o, pom, "O", st1, row.table):
                         for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
                             yield replace(st3, triples=st3.triples[1:])
@@ -242,8 +248,14 @@ class NewR2rStore(R2RStore):
                     #yield replace(st, wheres=st.wheres + [expr == toPython(node)])
                 return
 
-            for parent in mg.objects(tm, rr.parentTriplesMap):
-                raise NotImplementedError("TODO (1): Parent triples maps not implemented")
-                for st1 in self.match_node_to_term_map(node, parent, position, st, tab):
-                    yield st1
-                return
+            for parent_triple_map in mg.objects(tm, rr.parentTriplesMap):
+                jrow, jrst = self.get_row(st, node, parent_triple_map)
+                wheres: List[ColumnElement[bool]] = []
+                for join in mg.objects(tm, rr.joinCondition):
+                    childColumn = mg.value(join, rr.child)
+                    assert childColumn
+                    parentColumn = mg.value(join, rr.parent)
+                    assert parentColumn
+                    wheres.append(get_col(tab, str(childColumn)) == get_col(jrow.table, str(parentColumn)))
+
+                yield replace(jrst, wheres = jrst.wheres + wheres)
