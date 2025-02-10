@@ -39,14 +39,6 @@ from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm
 from rdflib_r2r.types import Triple, BGP
 from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
 
-class SelectSubForm(NamedTuple):
-    select: Select #: 
-    subforms: List[SubForm] #: 
-
-class GenerativeSelectSubForm(NamedTuple):
-    select: GenerativeSelect #: 
-    subforms: List[SubForm] #: 
-
 @dataclass
 class SelectVarSubForm:
     select: Select|CompoundSelect #: 
