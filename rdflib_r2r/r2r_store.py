@@ -47,15 +47,13 @@ class GenerativeSelectSubForm(NamedTuple):
     select: GenerativeSelect #: 
     subforms: List[SubForm] #: 
 
-SelectType = TypeVar("SelectType", bound=GenerativeSelect)
-
 @dataclass
-class SelectVarSubForm(Generic[SelectType]):
-    select: SelectType #: 
+class SelectVarSubForm:
+    select: Select|CompoundSelect #: 
     #: A map of RDF variables to the subforms that generate them from SQL expressions
     varsubforms: Dict[Variable, SubForm]
 
-    def as_tuple(self) -> tuple[SelectType, Dict[Variable, SubForm]]:
+    def as_tuple(self) -> tuple[Select|CompoundSelect, Dict[Variable, SubForm]]:
         return self.select, self.varsubforms
 
 class SparqlNotImplementedError(NotImplementedError):
@@ -113,15 +111,15 @@ def results_union(result1:None, result2: None) -> None:
     ...
 
 @overload
-def results_union(result1:SelectVarSubForm, result2: SelectVarSubForm) -> SelectVarSubForm[CompoundSelect]:
+def results_union(result1:SelectVarSubForm, result2: SelectVarSubForm) -> SelectVarSubForm:
     ...
 
 @overload
-def results_union(result1:SelectVarSubForm[SelectType], result2: None) -> SelectVarSubForm[SelectType]:
+def results_union(result1:SelectVarSubForm, result2: None) -> SelectVarSubForm:
     ...
 
 @overload
-def results_union(result1:None, result2: SelectVarSubForm[SelectType]) -> SelectVarSubForm[SelectType]:
+def results_union(result1:None, result2: SelectVarSubForm) -> SelectVarSubForm:
     ...
 
 def results_union(result1:SelectVarSubForm|None, result2: SelectVarSubForm|None):
@@ -240,7 +238,7 @@ class R2RStore(Store, ABC):
             return from_n3(val)
 
     @abstractmethod
-    def queryBGP(self, bgp: BGP) -> SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]:
+    def queryBGP(self, bgp: BGP) -> SelectVarSubForm:
         ...
 
  
@@ -485,7 +483,7 @@ class R2RStore(Store, ABC):
 
         return SelectVarSubForm(query, {v: SubForm([i], (None,)) for i,v in enumerate(var_colforms)})
 
-    def queryPart(self, part:CompValue) -> SelectVarSubForm[Select]|SelectVarSubForm[CompoundSelect]:
+    def queryPart(self, part:CompValue) -> SelectVarSubForm:
         if part.name == "BGP":
             return self.queryBGP(part.triples)
         if part.name == "Filter":
