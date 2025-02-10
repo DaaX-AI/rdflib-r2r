@@ -1,11 +1,12 @@
 from ast import Expr
+from curses.ascii import SP
 from dataclasses import dataclass, replace
 from io import StringIO
 import logging
 import re
 from string import Formatter
 from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
-from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable
+from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import AlternativePath, SequencePath, InvPath
 from sqlalchemy import Alias, CompoundSelect, types as sqltypes, MetaData
@@ -15,7 +16,7 @@ from sqlalchemy.sql.selectable import NamedFromClause, FromClauseAlias, FromClau
 from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
 from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, rr, toPython
 from rdflib_r2r.r2r_store import R2RStore, SelectVarSubForm, iter_opt, results_union, sql_and
-from rdflib_r2r.types import BGP, SQLQuery, SearchQuery
+from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
 @dataclass(frozen=True, eq=True, kw_only=True)
@@ -32,7 +33,7 @@ class VariableExpression:
 class ProcessingState:
     store:"NewR2rStore"
     rows: Dict[Node,Row]
-    var_expressions: Dict[Variable, ColumnElement]
+    var_expressions: Dict[SPARQLVariable, ColumnElement]
     wheres: List[ColumnElement[bool]]
     triples: List[SearchQuery]
 
@@ -145,7 +146,7 @@ class NewR2rStore(R2RStore):
         
         query_elements = []
         for rs in resulting_states:
-            select_exprs = [ expr.label(str(var)) for var, expr in rs.var_expressions.items() ]
+            select_exprs = [ expr.label(str(var)) for var, expr in rs.var_expressions.items() if isinstance(var,Variable) ]
             result = select(*select_exprs)
             if rs.wheres:
                 result = result.where(sql_and(*rs.wheres))
@@ -163,7 +164,7 @@ class NewR2rStore(R2RStore):
             raise NotImplementedError("TODO (2): Only URIRef predicates are supported")
 
         if p == RDF.type:
-            if isinstance(o, Variable):
+            if isinstance(o, SPARQLVariable):
                 raise NotImplementedError("TODO (2): retrieving types not supported")
             for sm in mg.subjects(rr['class'], o):
                 for tm in mg.subjects(rr.subjectMap, sm):
@@ -197,7 +198,7 @@ class NewR2rStore(R2RStore):
         else:
             raise ValueError("Invalid position: " + str(position))
         
-        def match_variable(node:Variable, expr: ColumnElement) -> Generator[ProcessingState, None, None]:
+        def match_variable(node:SPARQLVariable, expr: ColumnElement) -> Generator[ProcessingState, None, None]:
             vex = st.var_expressions.get(node, None)
             if vex is not None:
                 if same_expressions(expr,vex):
@@ -208,7 +209,7 @@ class NewR2rStore(R2RStore):
                 yield replace(st, var_expressions={**st.var_expressions, node: expr})
 
         for const in mg.objects(term_map, AlternativePath(shortcut_property, SequencePath(map_property, rr.constant))):
-            if isinstance(node, Variable):
+            if isinstance(node, SPARQLVariable):
                 yield from match_variable(node, literal(toPython(const)))
             elif const == node:
                 yield st
@@ -224,7 +225,7 @@ class NewR2rStore(R2RStore):
                 #    is_iri = False
 
                 colex = get_col(tab, str(column))
-                if isinstance(node, Variable):
+                if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, colex)
                 else:
                     yield replace(st, wheres=st.wheres + [colex == toPython(node)])
@@ -232,7 +233,7 @@ class NewR2rStore(R2RStore):
 
             for template in mg.objects(tm, rr.template):
                 expr = format_template(str(template), tab)
-                if isinstance(node, Variable):
+                if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, expr)
                 else:
                     #TODO check IRI vs literal

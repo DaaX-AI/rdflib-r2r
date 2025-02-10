@@ -4,6 +4,7 @@
 - [v] Support for joins (explicit via parentTriplesMap, e.g. shippers_of_order).
 - [v] Support for properties with multiple domains (e.g., Demo:city)
 - [v] Fix unions
+- [v] Support for blank nodes
 - [ ] Unpack joins into BGPs
 - [ ] Support for better equality of template-based objects (concats)
 

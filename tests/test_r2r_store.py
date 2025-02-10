@@ -176,6 +176,12 @@ class TestR2RStore(unittest.TestCase):
                      '''SELECT t0."OrderDate" AS order_date 
                      FROM "Orders" AS t0 
                      ORDER BY t0."Freight", t0."ShippedDate" DESC LIMIT 5 OFFSET 10''')
+        
+    def test_blank_node(self):
+        self.check('''select ?shid ?fr { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders [ Demo:freight ?fr ]. }''',
+                   '''SELECT t0."ShipperID" AS shid, t1."Freight" AS fr 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia"''')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
