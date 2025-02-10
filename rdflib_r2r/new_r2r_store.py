@@ -8,13 +8,13 @@ from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional,
 from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable
 from rdflib.term import Node
 from rdflib.paths import AlternativePath, SequencePath, InvPath
-from sqlalchemy import CompoundSelect, types as sqltypes, MetaData
+from sqlalchemy import Alias, CompoundSelect, types as sqltypes, MetaData
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.sql import Select, ColumnElement, select, literal_column, literal, func as sqlfunc
 from sqlalchemy.sql.selectable import NamedFromClause, FromClauseAlias, FromClause
 from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
 from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, SelectVarSubForm, results_union, sql_and
+from rdflib_r2r.r2r_store import R2RStore, SelectVarSubForm, iter_opt, results_union, sql_and
 from rdflib_r2r.types import BGP, SQLQuery, SearchQuery
 import queue
 
@@ -28,12 +28,25 @@ class VariableExpression:
     expression: ColumnElement
     template: str|None
 
-@dataclass
+@dataclass(frozen=True, eq=True, kw_only=True)
 class ProcessingState:
+    store:"NewR2rStore"
     rows: Dict[Node,Row]
     var_expressions: Dict[Variable, ColumnElement]
     wheres: List[ColumnElement[bool]]
     triples: List[SearchQuery]
+
+    def ensure_row(self, s:Node, triple_map:Node) -> "Optional[ProcessingState]":
+        row = self.rows.get(s, None)
+        tab = _get_table(self.store.mapping.graph, triple_map)
+        tab = self.store.metadata.tables[tab.name]
+        if not row:
+            row = Row(subject=s, table=tab.alias("t"+str(len(self.rows))))
+            return replace(self, rows={**self.rows, s: row})
+        elif cast(Alias, row.table).original != tab:
+            return None
+        else:
+            return self
 
 def get_col(tab:NamedFromClause, col_name:str) -> ColumnElement:
     return tab.c[col_name]
@@ -115,7 +128,7 @@ class NewR2rStore(R2RStore):
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
-        q.put(ProcessingState({}, {}, [], list(bgp)))
+        q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=list(bgp)))
         resulting_states: List[ProcessingState] = []
 
         while not q.empty():
@@ -140,16 +153,6 @@ class NewR2rStore(R2RStore):
 
         return results_union(query_elements)
     
-    def get_row(self, st:ProcessingState, s:Node, triple_map:Node) -> tuple[Row,ProcessingState]:
-        row = st.rows.get(s, None)
-        if not row:
-            tab = _get_table(self.mapping.graph, triple_map)
-            tab = self.metadata.tables[tab.name]
-            row = Row(subject=s, table=tab.alias("t"+str(len(st.rows))))
-            st = replace(st, rows={**st.rows, s: row})
-        #TODO: check that it's the same table
-        return row, st
-
     def process_next_triple(self, st: ProcessingState) -> Generator[ProcessingState, None, None]:
         mg = self.mapping.graph
         s, p, o = st.triples[0]
@@ -164,18 +167,20 @@ class NewR2rStore(R2RStore):
                 raise NotImplementedError("TODO (2): retrieving types not supported")
             for sm in mg.subjects(rr['class'], o):
                 for tm in mg.subjects(rr.subjectMap, sm):
-                    row, stR = self.get_row(st, s, tm)
-                    for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
-                        yield replace(st1, triples=st1.triples[1:])
+                    for rst in iter_opt(st.ensure_row(s, tm)):
+                        row = rst.rows[s]
+                        for st1 in self.match_node_to_term_map(s, tm, "S", rst, row.table):
+                            yield replace(st1, triples=st1.triples[1:])
 
         poms = self.pomaps_by_predicate.get(p, [])
         for pom in poms:
             for tm in mg.subjects(rr.predicateObjectMap, pom):
-                row, stR = self.get_row(st, s, tm)
-                for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
-                    for st2 in self.match_node_to_term_map(o, pom, "O", st1, row.table):
-                        for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
-                            yield replace(st3, triples=st3.triples[1:])
+                for stR in iter_opt(st.ensure_row(s,tm)):
+                    row = stR.rows[s]
+                    for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
+                        for st2 in self.match_node_to_term_map(o, pom, "O", st1, row.table):
+                            for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
+                                yield replace(st3, triples=st3.triples[1:])
 
     def match_node_to_term_map(self, node:Node, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
                 tab:NamedFromClause) -> Generator[ProcessingState, None, None]:
@@ -247,14 +252,15 @@ class NewR2rStore(R2RStore):
                 return
 
             for parent_triple_map in mg.objects(tm, rr.parentTriplesMap):
-                jrow, jrst = self.get_row(st, node, parent_triple_map)
-                wheres: List[ColumnElement[bool]] = []
-                for join in mg.objects(tm, rr.joinCondition):
-                    childColumn = mg.value(join, rr.child)
-                    assert childColumn
-                    parentColumn = mg.value(join, rr.parent)
-                    assert parentColumn
-                    wheres.append(get_col(tab, str(childColumn)) == get_col(jrow.table, str(parentColumn)))
+                for jrst in iter_opt(st.ensure_row(node, parent_triple_map)):
+                    wheres: List[ColumnElement[bool]] = []
+                    jrow = jrst.rows[node]
+                    for join in mg.objects(tm, rr.joinCondition):
+                        childColumn = mg.value(join, rr.child)
+                        assert childColumn
+                        parentColumn = mg.value(join, rr.parent)
+                        assert parentColumn
+                        wheres.append(get_col(tab, str(childColumn)) == get_col(jrow.table, str(parentColumn)))
 
-                jrst = replace(jrst, wheres = jrst.wheres + wheres)
-                yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)
+                    jrst = replace(jrst, wheres = jrst.wheres + wheres)
+                    yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)

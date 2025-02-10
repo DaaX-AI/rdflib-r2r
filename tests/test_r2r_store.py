@@ -135,6 +135,12 @@ class TestR2RStore(unittest.TestCase):
                    UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") AS o FROM "Employees" AS t0 WHERE t0."City" = 'Atlanta'
                    UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") AS o FROM "Suppliers" AS t0 WHERE t0."City" = 'Atlanta' ''')
         
+    def test_shared_prop_with_class(self):
+        self.check('''select ?o { ?o a Demo:Customers; Demo:city "Atlanta"}''',
+                   '''SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS o FROM "Customers" AS t0 WHERE t0."City" = 'Atlanta' ''')
+        
+    def test_sparql_join(self):
+        self.check('''select ?cn ?cc { { ?c a Demo:Customers; Demo:companyname ?cn . } { ?c Demo:city ?cc } }''', "dunno")
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

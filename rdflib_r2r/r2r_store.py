@@ -181,6 +181,12 @@ def op(opstr:str, cf1:ColumnElement, cf2:ColumnElement) -> ColumnElement:
         # TODO: fancy type casting
         return op(cf1, cf2)
 
+Element = TypeVar("Element")
+
+def iter_opt(o:Optional[Element]) -> Generator[Element,None,None]:
+    if o is not None:
+        yield o
+
 class R2RStore(Store, ABC):
     """
     Args:
