@@ -190,6 +190,9 @@ class TestR2RStore(unittest.TestCase):
                    '''SELECT t0."ShipperID" AS shid, t1."Freight" AS fr 
                    FROM "Shippers" AS t0, "Orders" AS t1 
                    WHERE t0."ShipperID" = t1."ShipVia"''')
+        
+    def test_const_query(self):
+        self.check('''select (1 as ?one) {}''', 'SELECT 1 AS one')
 
 N3_PREFIX='@prefix : <http://localhost:8890/Demo/> .\n'
 

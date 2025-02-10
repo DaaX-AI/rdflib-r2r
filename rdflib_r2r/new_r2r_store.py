@@ -163,8 +163,6 @@ class NewR2rStore(R2RStore):
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
-        if len(bgp) == 0:
-            raise ValueError("Empty BGPs are not supported")
         
         for rbgp in resolve_paths_in_triples(bgp):
             q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=rbgp))
@@ -172,12 +170,14 @@ class NewR2rStore(R2RStore):
 
         while not q.empty():
             st = q.get()
-
-            for nst in self.process_next_triple(st):
-                if not nst.triples:
-                    resulting_states.append(nst)
-                else:
-                    q.put(nst)
+            if not st.triples:
+                resulting_states.append(st)
+            else:
+                for nst in self.process_next_triple(st):
+                    if not nst.triples:
+                        resulting_states.append(nst)
+                    else:
+                        q.put(nst)
 
         if not resulting_states:
             raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping.graph) for t in bgp]}")
