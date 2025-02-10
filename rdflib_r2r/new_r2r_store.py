@@ -8,7 +8,7 @@ from string import Formatter
 from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
 from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable, BNode
 from rdflib.term import Node
-from rdflib.paths import AlternativePath, SequencePath, InvPath
+from rdflib.paths import Path, AlternativePath, SequencePath, InvPath, MulPath
 from sqlalchemy import Alias, CompoundSelect, types as sqltypes, MetaData
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.sql import Select, ColumnElement, select, literal_column, literal, func as sqlfunc
@@ -94,14 +94,49 @@ def expr_to_str(ex:ColumnElement):
 def same_expressions(ex1:ColumnElement, ex2:ColumnElement):
     return expr_to_str(ex1) == expr_to_str(ex2)
 
-def n3(nd:Node|None|tuple[Node|None,Node|None,Node|None], g:Graph|None = None):
+def n3(nd:Node|Path|None|tuple[Node|None,Node|Path|None,Node|None], g:Graph|None = None):
     if isinstance(nd, tuple):
         s,p,o = nd
         return "("+" ".join([n3(s,g), n3(p,g), n3(o,g)])+")"
-    if isinstance(nd, (IdentifiedNode,Variable)):
+    if isinstance(nd, (IdentifiedNode,Variable,Path)):
         return nd.n3(g.namespace_manager if g is not None else None)
     else:
         return str(nd)
+    
+def substitute_first_triple(triples: BGP, replacement_triples: List[SearchQuery]) -> Generator[List[SearchQuery], None, None]:
+    replacement_triples += triples[1:]
+    yield from resolve_paths_in_triples(replacement_triples)
+
+def resolve_paths_in_triples(triples: BGP) -> Generator[List[SearchQuery], None, None]:
+    if not triples:
+        yield []
+        return
+    
+    t0 = triples[0]
+    p = t0[1]
+    if isinstance(p, SequencePath):
+        replacement_triples = []
+        next_subj = t0[0]
+        for p1 in p.args[:-1]:
+            obj = BNode()
+            replacement_triples.append((next_subj, p1, obj))
+            next_subj = obj
+        replacement_triples.append((next_subj, p.args[-1], t0[2]))
+        yield from substitute_first_triple(triples, replacement_triples)
+    elif isinstance(p, AlternativePath):
+        for p1 in p.args:
+            yield from substitute_first_triple(triples, [(t0[0], p1, t0[2])])
+    elif isinstance (p, InvPath):
+        if isinstance(t0[2], (URIRef, BNode, Variable)):
+            yield from substitute_first_triple(triples, [(t0[2], p.arg, t0[0])])
+        else:
+            raise ValueError("Literals not supported as inverse path objects")
+    elif isinstance (p, Path):
+        raise NotImplementedError("Unsupported path type: " + str(p))
+    else:
+        for ts in resolve_paths_in_triples(triples[1:]):
+            yield [t0] + ts
+
 class NewR2rStore(R2RStore):
 
     pomaps_by_predicate: Dict[URIRef|None, List[Node]]
@@ -124,12 +159,15 @@ class NewR2rStore(R2RStore):
         self.metadata = MetaData()
         self.metadata.reflect(db)
 
+
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
-        q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=list(bgp)))
+        
+        for rbgp in resolve_paths_in_triples(bgp):
+            q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=rbgp))
         resulting_states: List[ProcessingState] = []
 
         while not q.empty():

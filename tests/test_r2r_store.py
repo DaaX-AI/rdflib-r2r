@@ -1,12 +1,14 @@
 import logging
 import re
-from typing import Mapping, Type
+from typing import List, Mapping, Type
 import unittest
 from sqlalchemy import create_engine, Engine, Connection, text
 
-from rdflib import Graph, Namespace, URIRef
-from rdflib_r2r.new_r2r_store import NewR2rStore
+from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
+from rdflib_r2r.new_r2r_store import NewR2rStore, resolve_paths_in_triples
 from rdflib_r2r.r2r_mapping import R2RMapping
+from rdflib_r2r.types import SearchQuery
+from rdflib.paths import SequencePath, AlternativePath, InvPath, MulPath
 
 def norm_ws(s:str|None) -> str|None:
     if s is None:
@@ -182,6 +184,71 @@ class TestR2RStore(unittest.TestCase):
                    '''SELECT t0."ShipperID" AS shid, t1."Freight" AS fr 
                    FROM "Shippers" AS t0, "Orders" AS t1 
                    WHERE t0."ShipperID" = t1."ShipVia"''')
+        
+    def test_path(self):
+        self.check('''select ?shid ?fr { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders / Demo:freight ?fr . }''',
+                   '''SELECT t0."ShipperID" AS shid, t1."Freight" AS fr 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia"''')
+
+N3_PREFIX='@prefix : <http://localhost:8890/Demo/> .\n'
+
+class TestResolvePathsInTriples(unittest.TestCase):
+    def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
+        actual_triples_lists = list(resolve_paths_in_triples(triples))
+        for i, (ac, exp) in enumerate(zip(actual_triples_lists, resolved_triples)):
+            bnode_map = {}
+            def error():
+                raise Exception(f"Error in triples list {i}:\nActual: {ac}\nExpected: {exp}")
+            for at, bt in zip(ac, exp):
+                for an, bn in zip(at,bt):
+                    if an in bnode_map:
+                        if bnode_map[an] != bn:
+                            error()
+                    elif isinstance(an, BNode):
+                        if isinstance(bn, BNode) and bn not in bnode_map:
+                            bnode_map[an] = bn
+                            bnode_map[bn] = an
+                    else:
+                        if an != bn:
+                            error()
+                            
+
+    def test_simple(self):
+        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person)],[[(DEMO_NS.Me, RDF.type, DEMO_NS.Person)]])
+
+    def test_simple_multiple_triples(self):
+        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))],
+                   [[(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))]])
+
+    def test_sequence(self):
+        b = BNode()
+        self.check([(DEMO_NS.Me, SequencePath(DEMO_NS.dog, DEMO_NS.name), Literal("DogsName"))],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, b),(b, DEMO_NS.name, Literal("DogsName"))]])
+
+    def test_alt(self):
+        self.check([(DEMO_NS.Me, AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.MyPet)],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyPet)], [(DEMO_NS.Me, DEMO_NS.cat, DEMO_NS.MyPet)]])
+
+    def test_inv(self):
+        self.check([(DEMO_NS.MyDog, InvPath(DEMO_NS.dog), DEMO_NS.Me)],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyDog)]])
+        
+    def test_combo(self):
+        b = BNode()
+        self.check([(DEMO_NS.Me, SequencePath(AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.name), Literal("PetsName")),
+                    (DEMO_NS.Me, InvPath(DEMO_NS.master), DEMO_NS.MyDog)],
+                     [[
+                         (DEMO_NS.Me, DEMO_NS.dog, b),
+                         (b, DEMO_NS.name, Literal("PetsName")),
+                         (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
+                         ],
+                      [
+                          (DEMO_NS.Me, DEMO_NS.cat, b),
+                          (b, DEMO_NS.name, Literal("PetsName")),
+                          (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
+                          ]
+                    ])
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
