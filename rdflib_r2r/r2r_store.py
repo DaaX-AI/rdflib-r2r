@@ -13,10 +13,8 @@ The mapped SQL database as an RDF graph store object
 
 """
 from abc import ABC, abstractmethod
-from collections import Counter
 from dataclasses import dataclass
-from os import linesep
-from typing import Any, Generator, Generic, Iterable, Mapping, Optional, List, Dict, NamedTuple, cast, TypeVar, overload, Sequence
+from typing import Any, Generator, Mapping, Optional, List, Dict, cast, TypeVar, Sequence
 import logging
 import base64
 import re
@@ -29,16 +27,16 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import Alias, ColumnElement, CompoundSelect, Label, and_, except_, literal, select, null, literal_column
+from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
-from sqlalchemy.sql.expression import GenerativeSelect, Select
-from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause
+from sqlalchemy.sql.expression import Select
+from sqlalchemy.sql.selectable import _CompoundSelectKeyword
 from sqlalchemy.sql.elements import NamedColumn
-from sqlalchemy.engine import Engine, Connection
+from sqlalchemy.engine import Engine
 
-from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm
-from rdflib_r2r.types import SQLQuery, Triple, BGP
+from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
+from rdflib_r2r.types import SQLQuery, BGP
 from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
 
 @dataclass
@@ -93,10 +91,10 @@ XSDToSQL = {
 }
 
 
-def sql_pretty(query:SQLQuery):
+def sql_pretty(query:SQLQuery, dialect:Optional[Dialect] = None) -> str:
     import sqlparse
 
-    qstr = str(query.compile(compile_kwargs={"literal_binds": True}))
+    qstr = str(query.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
     return sqlparse.format(qstr, reindent=True, keyword_case="upper")
 
 def get_named_columns(query:Select|CompoundSelect) -> Dict[str,ColumnElement]:
@@ -181,6 +179,14 @@ def op(opstr:str, cf1:ColumnElement, cf2:ColumnElement) -> ColumnElement:
         op = sqlalchemy.sql.operators.custom_op(opstr, is_comparison=True)
         # TODO: fancy type casting
         return op(cf1, cf2)
+    
+def print_algebra(sparql:str, initNs:Mapping[str, Any] ={}):
+    from rdflib.plugins.sparql.parser import parseQuery
+    from rdflib.plugins.sparql.algebra import translateQuery, pprintAlgebra
+
+    parsetree = parseQuery(sparql)
+    queryobj = translateQuery(parsetree, None, initNs)
+    pprintAlgebra(queryobj)
 
 Element = TypeVar("Element")
 
@@ -432,21 +438,16 @@ class R2RStore(Store, ABC):
     
     def queryOrderBy(self, part) -> SQLQuery:
         part_query = self.queryPart(part.p)
-        cols = list(part_query.exported_columns)
-        var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
+        ncs = get_named_columns(part_query)
 
-        ordering = []
-        for e in part.expr:
-            expr_cf = self.queryExpr(e.expr, var_cf)
-            if expr_cf.form[0] != '<':
-                for col in expr_cf.cols:
-                    if e.order == "DESC":
-                        col = sqlalchemy.desc(col)
-                    ordering.append(col)
-            else:
-                ordering.append(expr_cf.expr())
+        ordering:List[ColumnElement] = []
+        for oc in part.expr:
+            expr = self.queryExpr(oc.expr, ncs)
+            if oc.order == "DESC":
+                expr = sqlalchemy.desc(expr)
+            ordering.append(expr)
 
-        return SelectVarSubForm(part_query.order_by(*ordering), var_subform)
+        return part_query.order_by(*ordering)
 
     def queryUnion(self, part) -> SQLQuery:
         return results_union([self.queryPart(part.p1), self.queryPart(part.p2)])
@@ -557,9 +558,8 @@ class R2RStore(Store, ABC):
 
         parsetree = parseQuery(sparqlQuery)
         queryobj = translateQuery(parsetree, base, initNs)
-        with self.db.connect() as conn:
-            query = self.queryPart(queryobj.algebra)
-            return sql_pretty(query)
+        sql_query = self.queryPart(queryobj.algebra)
+        return sql_pretty(sql_query, dialect=self.db.dialect)
 
     def create(self, configuration):
         raise TypeError("The DB mapping is read only!")

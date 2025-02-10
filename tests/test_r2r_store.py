@@ -161,6 +161,21 @@ class TestR2RStore(unittest.TestCase):
                     #   WHERE j1.c = j2.c'''
                 )
 
+    def test_orderby_limit(self):
+        self.check('''select ?order_date {
+                     ?o a Demo:Orders; Demo:orderdate ?order_date; Demo:freight ?fr.
+                     } order by ?fr limit 5''',
+                     '''SELECT t0."OrderDate" AS order_date 
+                     FROM "Orders" AS t0 
+                     ORDER BY t0."Freight" LIMIT 5 OFFSET 0''')
+
+    def test_orderby_desc_limit_offset(self):
+        self.check('''select ?order_date {
+                     ?o a Demo:Orders; Demo:orderdate ?order_date; Demo:freight ?fr; Demo:shippeddate ?sd.
+                     } order by ?fr desc(?sd) limit 5 offset 10''',
+                     '''SELECT t0."OrderDate" AS order_date 
+                     FROM "Orders" AS t0 
+                     ORDER BY t0."Freight", t0."ShippedDate" DESC LIMIT 5 OFFSET 10''')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
