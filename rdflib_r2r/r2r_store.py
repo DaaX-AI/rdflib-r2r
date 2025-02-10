@@ -299,6 +299,10 @@ class R2RStore(Store, ABC):
                 return func(sub.expr())
 
         if hasattr(expr, "name") and (expr.name == "RelationalExpression"):
+            if expr.op == "IN":
+                a = self.queryExpr(expr.expr, var_cf)
+                b = [ self.queryExpr(elt, var_cf) for elt in expr.other ]
+                return a.in_(b)
             a = self.queryExpr(expr.expr, var_cf)
             b = self.queryExpr(expr.other, var_cf)
             return op(expr.op, a, b)

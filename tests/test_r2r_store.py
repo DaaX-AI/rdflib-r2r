@@ -194,6 +194,9 @@ class TestR2RStore(unittest.TestCase):
     def test_const_query(self):
         self.check('''select (1 as ?one) {}''', 'SELECT 1 AS one')
 
+    def test_in_op(self):
+        self.check('''select (1 in (1,2,3) as ?itsin) {}''', 'SELECT 1 IN (1, 2, 3) AS itsin')
+
 N3_PREFIX='@prefix : <http://localhost:8890/Demo/> .\n'
 
 class TestResolvePathsInTriples(unittest.TestCase):
