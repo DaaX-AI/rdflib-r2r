@@ -13,9 +13,10 @@ The mapped SQL database as an RDF graph store object
 
 """
 from abc import ABC, abstractmethod
+from collections import Counter
 from dataclasses import dataclass
 from os import linesep
-from typing import Any, Generic, Mapping, Optional, List, Dict, NamedTuple, cast, TypeVar, overload
+from typing import Any, Generator, Generic, Iterable, Mapping, Optional, List, Dict, NamedTuple, cast, TypeVar, overload, Sequence
 import logging
 import base64
 import re
@@ -28,24 +29,24 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import CompoundSelect, Label, except_, select, null, literal_column
+from sqlalchemy import ColumnElement, CompoundSelect, Label, except_, literal, select, null, literal_column
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import GenerativeSelect, Select
-
+from sqlalchemy.sql.selectable import _CompoundSelectKeyword
 from sqlalchemy.engine import Engine, Connection
 
 from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm
-from rdflib_r2r.types import Triple, BGP
+from rdflib_r2r.types import SQLQuery, Triple, BGP
 from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
 
 @dataclass
 class SelectVarSubForm:
-    select: Select|CompoundSelect #: 
+    select: SQLQuery #: 
     #: A map of RDF variables to the subforms that generate them from SQL expressions
     varsubforms: Dict[Variable, SubForm]
 
-    def as_tuple(self) -> tuple[Select|CompoundSelect, Dict[Variable, SubForm]]:
+    def as_tuple(self) -> tuple[SQLQuery, Dict[Variable, SubForm]]:
         return self.select, self.varsubforms
 
 class SparqlNotImplementedError(NotImplementedError):
@@ -91,66 +92,94 @@ XSDToSQL = {
 }
 
 
-def sql_pretty(query:Select|CompoundSelect):
+def sql_pretty(query:SQLQuery):
     import sqlparse
 
     qstr = str(query.compile(compile_kwargs={"literal_binds": True}))
     return sqlparse.format(qstr, reindent=True, keyword_case="upper")
 
+def get_named_columns(query:Select) -> Dict[str,ColumnElement]:
+    return { col.name: col for col in query.exported_columns if isinstance(col, Label)}
 
-@overload
-def results_union(result1:None, result2: None) -> None:
-    ...
+def results_union(queries:Sequence[SQLQuery]) -> SQLQuery:
 
-@overload
-def results_union(result1:SelectVarSubForm, result2: SelectVarSubForm) -> SelectVarSubForm:
-    ...
+    if len(queries) == 1:
+        return queries[0]
 
-@overload
-def results_union(result1:SelectVarSubForm, result2: None) -> SelectVarSubForm:
-    ...
+    selects: List[Select] = []
+    def add_selects(q:SQLQuery):
+        if isinstance(q,Select):
+            selects.append(q)
+        elif q.keyword == _CompoundSelectKeyword.UNION_ALL:
+            for sq in q.selects:
+                if isinstance(sq, SQLQuery):
+                    add_selects(sq)
+                else:
+                    raise ValueError(f"Unexpected sub-select: {sq}")
 
-@overload
-def results_union(result1:None, result2: SelectVarSubForm) -> SelectVarSubForm:
-    ...
+    for q in queries:
+        add_selects(q)
 
-def results_union(result1:SelectVarSubForm|None, result2: SelectVarSubForm|None):
-    if result2 is None:
-        return result1
-    if result1 is None:
-        return result2
+    column_lists:List[List[ColumnElement]] = []
+    for _ in range(len(selects)):
+        column_lists.append([])
 
-    query1, var_subform1 = result1.as_tuple()
-    query2, var_subform2 = result2.as_tuple()
+    done: set[str] = set()
+    named_columns = [ get_named_columns(q) for q in selects]
 
-    all_vars = set(var_subform1) | set(var_subform2)
+    for ncs in named_columns:
+        for vn in ncs:
+            if vn not in done:
+                done.add(vn)
+                for i in range(len(selects)):
+                    e = named_columns[i].get(vn,None)
+                    if e is None:
+                        e = null().label(vn)
+                    column_lists[i].append(e)
 
-    cols1, cols2 = list(query1.exported_columns), list(query2.exported_columns)
-    allcols1, allcols2 = [], []
-    var_sf: Dict[Variable,SubForm] = {}
-    for i, v in enumerate(all_vars):
-        # TODO: if forms are identical, don't convert to expression
-        var_sf[v] = SubForm([i], (None,))
-        if v in var_subform1:
-            e1 = ExpressionTemplate.from_subform(cols1, *var_subform1[v]).expr()
-        else:
-            e1 = null()
-        allcols1.append(e1.label(str(v)))
-        if v in var_subform2:
-            e2 = ExpressionTemplate.from_subform(cols2, *var_subform2[v]).expr()
-        else:
-            e2 = null()
-        allcols2.append(e2.label(str(v)))
-    query1 = select(*allcols1)
-    query2 = select(*allcols2)
+    extended_queries = [ q.with_only_columns(*cols) for q, cols in zip(selects,column_lists) ]
+    return union_all(*extended_queries)
 
-    return SelectVarSubForm(union_all(query1, query2), var_sf)
+def project_query(query:SQLQuery, names:Sequence[str]):
+    actual_names = [ec.name if isinstance(ec, Label) else None for ec in query.exported_columns ]
+    if actual_names == names:
+        return query
+    
+    query = as_select(query)
+    named_query_cols = get_named_columns(query)
+    cols = []
+    for vn in names:
+        nc = named_query_cols.get(vn,None)
+        cols.append(nc if nc is not None else null().label(vn))
 
-def as_select(query:Select|CompoundSelect) ->Select:
+    return query.with_only_columns(*cols)
+
+
+def as_select(query:SQLQuery) ->Select:
     if isinstance(query, CompoundSelect):
         sq = query.subquery()
         query = select(*[col.label(col.key) for col in sq.exported_columns])
     return query
+
+def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
+    if expressions:
+        e0, *es = expressions
+        for e in es:
+            yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
+
+
+def op(opstr:str, cf1:ColumnElement, cf2:ColumnElement) -> ColumnElement:
+    if opstr in ["=", "=="]:
+        return sql_and(*equal(cf1, cf2))
+    elif opstr in ["!=", "<>"]:
+        return sql_or(*equal(cf1, cf2, eq=False))
+    elif opstr == "/":
+        op = sqlalchemy.sql.operators.custom_op(opstr, is_comparison=True)
+        return sqlfunc.cast(op(cf1, cf2), sqltypes.REAL)
+    else:
+        op = sqlalchemy.sql.operators.custom_op(opstr, is_comparison=True)
+        # TODO: fancy type casting
+        return op(cf1, cf2)
 
 class R2RStore(Store, ABC):
     """
@@ -230,11 +259,11 @@ class R2RStore(Store, ABC):
             return from_n3(val)
 
     @abstractmethod
-    def queryBGP(self, bgp: BGP) -> SelectVarSubForm:
+    def queryBGP(self, bgp: BGP) -> SQLQuery:
         ...
 
  
-    def queryExpr(self, expr, var_cf:dict[Variable, ExpressionTemplate]) -> ExpressionTemplate:
+    def queryExpr(self, expr, var_cf:dict[str, ColumnElement]) -> ColumnElement:
         # TODO: this all could get really complicated with expression types...
         agg_funcs = {
             "Aggregate_Sample": lambda x: x,
@@ -252,14 +281,14 @@ class R2RStore(Store, ABC):
             func = agg_funcs[expr.name]
             if (len(sub.cols) == 1) and (expr.name == "Aggregate_Count"):
                 # Count queries don't need full node expression
-                return ExpressionTemplate.from_expr(func(sub.cols[0]))
+                return func(sub.cols[0])
             else:
-                return ExpressionTemplate.from_expr(func(sub.expr()))
+                return func(sub.expr())
 
         if hasattr(expr, "name") and (expr.name == "RelationalExpression"):
             a = self.queryExpr(expr.expr, var_cf)
             b = self.queryExpr(expr.other, var_cf)
-            return ExpressionTemplate.op(expr.op, a, b)
+            return op(expr.op, a, b)
 
         math_expr_names = ["MultiplicativeExpression", "AdditiveExpression"]
         if hasattr(expr, "name") and (expr.name in math_expr_names):
@@ -267,50 +296,54 @@ class R2RStore(Store, ABC):
             a = self.queryExpr(expr.expr, var_cf)
             for other in expr.other:
                 b = self.queryExpr(other, var_cf)
-                return ExpressionTemplate.op(expr.op[0], a, b)
+                return op(expr.op[0], a, b)
 
         if hasattr(expr, "name") and (expr.name == "ConditionalAndExpression"):
             exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
-            return ExpressionTemplate.from_expr(sql_and(*[e.expr() for e in exprs]))
+            return sql_and(*exprs)
 
         if hasattr(expr, "name") and (expr.name == "ConditionalOrExpression"):
             exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
-            return ExpressionTemplate.from_expr(sql_or(*[e.expr() for e in exprs]))
+            return sql_or(*exprs)
 
         if hasattr(expr, "name") and (expr.name == "Function"):
             # TODO: it would be super cool to do UDFs here
             if expr.iri in XSDToSQL:
                 for e in expr.expr:
                     cf = self.queryExpr(e, var_cf)
-                    val = sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
-                    return ExpressionTemplate.from_expr(val)
+                    return sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
 
         if hasattr(expr, "name") and (expr.name == "UnaryNot"):
             cf = self.queryExpr(expr.expr, var_cf)
-            return ExpressionTemplate.from_expr( sqlalchemy.not_(cf.expr()) ) 
+            return sqlalchemy.not_(cf) 
         
         if hasattr(expr, "name") and (expr.name == "Builtin_BOUND"):
             cf = self.queryExpr(expr.arg, var_cf)
-            return ExpressionTemplate.from_expr( cf.expr().is_(None) ) 
+            return sqlfunc.not_(cf.is_(None))
 
-        if isinstance(expr, str) and (expr in var_cf):
-            return var_cf[expr]
+        if isinstance(expr, Variable):
+            result = var_cf.get(str(expr),None)
+            if result is None:
+                return null()
+            return result
         if isinstance(expr, URIRef):
-            return ExpressionTemplate.from_expr(expr.n3())
+            return literal(expr.n3())
         if isinstance(expr, Literal):
-            return ExpressionTemplate.from_expr(expr.toPython())
+            return literal(expr.toPython()) 
         if isinstance(expr, str):
-            return ExpressionTemplate.from_expr(toPython(cast(Node,from_n3(expr))))
+            return literal(toPython(cast(Node,from_n3(expr))))
 
         e = f'Expr not implemented: {getattr(expr, "name", None).__repr__()} {expr}'
         raise SparqlNotImplementedError(e)
 
-    def queryFilter(self, part:CompValue) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(part.p).as_tuple()
+    def queryFilter(self, part:CompValue) -> SQLQuery:
+        part_query = self.queryPart(part.p)
+        part_query = as_select(part_query)
+        named_cols = get_named_columns(part_query)
 
         if getattr(part.expr, "name", None) == "Builtin_NOTEXISTS":
             # This is weird, but I guess that's how it is
-            query2, var_subform2 = self.queryPart(part.expr.graph).as_tuple()
+            query2 = self.queryPart(part.expr.graph)
 
             var_colforms = {}
             cols1 = list(part_query.exported_columns)
@@ -321,23 +354,19 @@ class R2RStore(Store, ABC):
                 var_colforms.setdefault(v, []).append(ExpressionTemplate.from_subform(cols2, *sf2))
 
             where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
-            return SelectVarSubForm(as_select(part_query).filter(~as_select(query2).where(*where).exists()), var_subform)
+            return part_query.filter(~as_select(query2).where(*where).exists())
 
-        cols = list(getattr(part_query, "exported_columns", part_query.c))
-        var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
-        logging.warning(('Building filter clause from', part.expr, var_cf))
-        clause = self.queryExpr(part.expr, var_cf).expr()
-        logging.warning(('Built filter clause', str(clause.compile())))
+        clause = self.queryExpr(part.expr, named_cols)
 
         # Filter should be HAVING for aggregates
         if part.p.name == "AggregateJoin":
-            return SelectVarSubForm(as_select(part_query).having(clause), var_subform)
+            return part_query.having(clause)
         else:
-            return SelectVarSubForm(as_select(part_query).where(clause), var_subform)
+            return part_query.where(clause)
 
-    def queryJoin(self, part) -> SelectVarSubForm:
-        query1, var_subform1 = self.queryPart(part.p1).as_tuple()
-        query2, var_subform2 = self.queryPart(part.p2).as_tuple()
+    def queryJoin(self, part) -> SQLQuery:
+        query1 = self.queryPart(part.p1)
+        query2 = self.queryPart(part.p2)
         if not query1.c:
             return SelectVarSubForm(query2, var_subform2)
         if not query2.c:
@@ -356,10 +385,10 @@ class R2RStore(Store, ABC):
         where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
         return SelectVarSubForm(select(*allcols).where(*where), dict(zip(var_colforms, subforms)))
 
-    def queryAggregateJoin(self, agg) -> SelectVarSubForm:
+    def queryAggregateJoin(self, agg) -> SQLQuery:
         # Assume agg.p is always a Group
         group_expr, group_part = agg.p.expr, agg.p.p
-        part_query, var_subform = self.queryPart(group_part).as_tuple()
+        part_query, var_subform = self.queryPart(group_part)
         cols = part_query.c
         var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
 
@@ -376,43 +405,20 @@ class R2RStore(Store, ABC):
         query = select(*allcols).group_by(*groups)
         return SelectVarSubForm(query, dict(zip(var_agg, subforms)))
 
-    def queryExtend(self, part) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(part.p).as_tuple()
-        assert isinstance(part_query, Select)  # ?
-        cols = list(part_query.exported_columns)
-        var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
-
-        cf = self.queryExpr(part.expr, var_cf)
-        idxs = []
-        for c in cf.cols:
-            if c in cols:
-                idxs.append(cols.index(c))
-            else:
-                idxs.append(len(cols))
-                cols.append(c)
-
-        var_subform[part.var] = SubForm(idxs, cf.form)
-
-        return SelectVarSubForm(part_query.with_only_columns(*(cols + list(cf.cols))), var_subform)
-
-    def queryProject(self, part:CompValue) -> SelectVarSubForm:
-        project_subject = self.queryPart(part.p)
-        part_query, var_subform = project_subject.as_tuple()
-        actual_names = [ec.name if isinstance(ec, Label) else None for ec in part_query.exported_columns ]
-        expected_names = [str(v) for v in part.PV]
-        if actual_names == expected_names:
-            return project_subject
-        
+    def queryExtend(self, part) -> SQLQuery:
+        part_query = self.queryPart(part.p)
         part_query = as_select(part_query)
-        var_subform = {v: var_subform.get(v,None) or NULL_SUBFORM for v in part.PV }
-        cols = list(part_query.exported_columns)
-        colforms = [ExpressionTemplate.from_subform(cols, *sf) for sf in var_subform.values()]
-        subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
-        part_query = part_query.with_only_columns(*allcols)
-        return SelectVarSubForm(part_query, dict(zip(var_subform, subforms)))
 
-    def queryOrderBy(self, part) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(part.p).as_tuple()
+        cf = self.queryExpr(part.expr, get_named_columns(part_query))
+        return part_query.with_only_columns(*part_query.exported_columns, cf.label(str(part.var)))
+
+    def queryProject(self, part:CompValue) -> SQLQuery:
+        part_query = self.queryPart(part.p)
+        expected_names = [str(v) for v in part.PV]
+        return project_query(part_query, expected_names)
+    
+    def queryOrderBy(self, part) -> SQLQuery:
+        part_query = self.queryPart(part.p)
         cols = list(part_query.exported_columns)
         var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
 
@@ -429,21 +435,21 @@ class R2RStore(Store, ABC):
 
         return SelectVarSubForm(part_query.order_by(*ordering), var_subform)
 
-    def queryUnion(self, part) -> SelectVarSubForm:
-        return results_union(self.queryPart(part.p1), self.queryPart(part.p2))
+    def queryUnion(self, part) -> SQLQuery:
+        return results_union([self.queryPart(part.p1), self.queryPart(part.p2)])
 
-    def querySlice(self, part) -> SelectVarSubForm:
-        query, var_subform = self.queryPart(part.p).as_tuple()
+    def querySlice(self, part) -> SQLQuery:
+        query = self.queryPart(part.p)
         if part.start:
             query = query.offset(part.start)
         if part.length:
             query = query.limit(part.length)
-        return SelectVarSubForm(query, var_subform)
+        return query
 
-    def queryLeftJoin(self, part) -> SelectVarSubForm:
+    def queryLeftJoin(self, part) -> SQLQuery:
 
-        query1, var_subform1 = self.queryPart(part.p1).as_tuple()
-        query2, var_subform2 = self.queryPart(part.p2).as_tuple()
+        query1, var_subform1 = self.queryPart(part.p1)
+        query2, var_subform2 = self.queryPart(part.p2)
         if not query1.c:
             return SelectVarSubForm(query2, var_subform2)
         if not query2.c:
@@ -475,7 +481,7 @@ class R2RStore(Store, ABC):
 
         return SelectVarSubForm(query, {v: SubForm([i], (None,)) for i,v in enumerate(var_colforms)})
 
-    def queryPart(self, part:CompValue) -> SelectVarSubForm:
+    def queryPart(self, part:CompValue) -> SQLQuery:
         if part.name == "BGP":
             return self.queryBGP(part.triples)
         if part.name == "Filter":
@@ -492,12 +498,12 @@ class R2RStore(Store, ABC):
             # no idea what this should do
             return self.queryPart(part.p)
         if part.name == "Minus":
-            q1, v1 = self.queryPart(part.p1).as_tuple()
-            q2, _ = self.queryPart(part.p2).as_tuple()
-            return SelectVarSubForm(except_(q1,q2), v1)
+            q1 = self.queryPart(part.p1)
+            q2 = self.queryPart(part.p2)
+            return except_(q1,q2)
         if part.name == "Distinct":
-            query, var_subform = self.queryPart(part.p).as_tuple()
-            return SelectVarSubForm(as_select(query).distinct(), var_subform)
+            query = self.queryPart(part.p)
+            return as_select(query).distinct()
         if part.name == "OrderBy":
             return self.queryOrderBy(part)
         if part.name == "Union":
@@ -527,25 +533,9 @@ class R2RStore(Store, ABC):
                     first = False
                 yield dict(zip(keys, [self.make_node(v) for v in vals]))
 
-    @staticmethod
-    def _apply_subforms(query:Select|CompoundSelect, var_subform: Dict[Variable, SubForm]) -> Select|CompoundSelect:
-        if isinstance(query, Select):
-            cols = [
-                ExpressionTemplate.from_subform(query.exported_columns, *sf).expr().label(str(var))
-                for var, sf in var_subform.items()
-            ]
-            return query.with_only_columns(*cols)
-        else:
-            cols = [
-                ExpressionTemplate.from_subform(query.c, *sf).expr().label(str(var))
-                for var, sf in var_subform.items()
-            ]
-            return select(*cols)
 
     def evalPart(self, part:CompValue):
-        with self.db.connect() as conn:
-            query, var_subform = self.queryPart(part).as_tuple()
-            query = self._apply_subforms(query, var_subform)
+        query = self.queryPart(part)
         return self.exec(query)
 
     def getSQL(self, sparqlQuery, base:str|None=None, initNs:Mapping[str, Any] | None={}):
@@ -555,9 +545,8 @@ class R2RStore(Store, ABC):
         parsetree = parseQuery(sparqlQuery)
         queryobj = translateQuery(parsetree, base, initNs)
         with self.db.connect() as conn:
-            query, var_subform = self.queryPart(queryobj.algebra).as_tuple()
-            sqlquery = self._apply_subforms(query, var_subform)
-            return sql_pretty(sqlquery)
+            query = self.queryPart(queryobj.algebra)
+            return sql_pretty(query)
 
     def create(self, configuration):
         raise TypeError("The DB mapping is read only!")

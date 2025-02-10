@@ -15,7 +15,7 @@ from sqlalchemy.sql.selectable import NamedFromClause, FromClauseAlias, FromClau
 from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
 from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, rr, toPython
 from rdflib_r2r.r2r_store import R2RStore, SelectVarSubForm, results_union, sql_and
-from rdflib_r2r.types import BGP, SearchQuery
+from rdflib_r2r.types import BGP, SQLQuery, SearchQuery
 import queue
 
 @dataclass(frozen=True, eq=True, kw_only=True)
@@ -111,7 +111,7 @@ class NewR2rStore(R2RStore):
         self.metadata.reflect(db)
 
             
-    def queryBGP(self, bgp: BGP) -> SelectVarSubForm:
+    def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
         if len(bgp) == 0:
             raise ValueError("Empty BGPs are not supported")
@@ -127,24 +127,18 @@ class NewR2rStore(R2RStore):
                 else:
                     q.put(nst)
 
-        full_result:SelectVarSubForm|None = None
+        if not resulting_states:
+            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping.graph) for t in bgp]}")
+        
+        query_elements = []
         for rs in resulting_states:
-            subforms: Dict[Variable, SubForm] = {}
-            select_exprs: List[ColumnElement] = []
-
-            for i, (var, expr) in enumerate(rs.var_expressions.items()):
-                select_exprs.append(expr)
-                subforms[var] = SubForm([i], ExpressionTemplate.from_expr(expr).form)
-                
+            select_exprs = [ expr.label(str(var)) for var, expr in rs.var_expressions.items() ]
             result = select(*select_exprs)
             if rs.wheres:
                 result = result.where(sql_and(*rs.wheres))
-            full_result = results_union(full_result, SelectVarSubForm(result, subforms))
+            query_elements.append(result)
 
-        if not full_result:
-            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping.graph) for t in bgp]}")
-
-        return full_result
+        return results_union(query_elements)
     
     def get_row(self, st:ProcessingState, s:Node, triple_map:Node) -> tuple[Row,ProcessingState]:
         row = st.rows.get(s, None)
