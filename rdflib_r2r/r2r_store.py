@@ -28,7 +28,7 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import CompoundSelect, except_, select, null, literal_column
+from sqlalchemy import CompoundSelect, Label, except_, select, null, literal_column
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import GenerativeSelect, Select
@@ -101,7 +101,7 @@ XSDToSQL = {
 }
 
 
-def sql_pretty(query):
+def sql_pretty(query:Select|CompoundSelect):
     import sqlparse
 
     qstr = str(query.compile(compile_kwargs={"literal_binds": True}))
@@ -135,7 +135,7 @@ def results_union(result1:SelectVarSubForm|None, result2: SelectVarSubForm|None)
 
     all_vars = set(var_subform1) | set(var_subform2)
 
-    cols1, cols2 = list(query1.c), list(query2.c)
+    cols1, cols2 = list(query1.exported_columns), list(query2.exported_columns)
     allcols1, allcols2 = [], []
     var_sf: Dict[Variable,SubForm] = {}
     for i, v in enumerate(all_vars):
@@ -158,7 +158,8 @@ def results_union(result1:SelectVarSubForm|None, result2: SelectVarSubForm|None)
 
 def as_select(query:Select|CompoundSelect) ->Select:
     if isinstance(query, CompoundSelect):
-        query = select(query.subquery())
+        sq = query.subquery()
+        query = select(*[col.label(col.key) for col in sq.exported_columns])
     return query
 
 class R2RStore(Store, ABC):
@@ -405,12 +406,19 @@ class R2RStore(Store, ABC):
         return SelectVarSubForm(part_query.with_only_columns(*(cols + list(cf.cols))), var_subform)
 
     def queryProject(self, part:CompValue) -> SelectVarSubForm:
-        part_query, var_subform = self.queryPart(part.p).as_tuple()
+        project_subject = self.queryPart(part.p)
+        part_query, var_subform = project_subject.as_tuple()
+        actual_names = [ec.name if isinstance(ec, Label) else None for ec in part_query.exported_columns ]
+        expected_names = [str(v) for v in part.PV]
+        if actual_names == expected_names:
+            return project_subject
+        
+        part_query = as_select(part_query)
         var_subform = {v: var_subform.get(v,None) or NULL_SUBFORM for v in part.PV }
         cols = list(part_query.exported_columns)
         colforms = [ExpressionTemplate.from_subform(cols, *sf) for sf in var_subform.values()]
         subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
-        part_query = as_select(part_query).with_only_columns(*allcols)
+        part_query = part_query.with_only_columns(*allcols)
         return SelectVarSubForm(part_query, dict(zip(var_subform, subforms)))
 
     def queryOrderBy(self, part) -> SelectVarSubForm:
@@ -530,7 +538,7 @@ class R2RStore(Store, ABC):
                 yield dict(zip(keys, [self.make_node(v) for v in vals]))
 
     @staticmethod
-    def _apply_subforms(query:Select|CompoundSelect, var_subform: Dict[Variable, SubForm]) -> Select:
+    def _apply_subforms(query:Select|CompoundSelect, var_subform: Dict[Variable, SubForm]) -> Select|CompoundSelect:
         if isinstance(query, Select):
             cols = [
                 ExpressionTemplate.from_subform(query.exported_columns, *sf).expr().label(str(var))

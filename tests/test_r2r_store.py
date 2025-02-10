@@ -116,14 +116,36 @@ class TestR2RStore(unittest.TestCase):
         self.check('''select ?person { 
                    { ?person a Demo:Employees } UNION { ?person a Demo:Customers }
                    }''',
-            '''SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as person FROM "Employees" AS t0
-            UNION SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0''')
+            '''SELECT anon_1.person AS person FROM 
+                (SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") AS person FROM "Employees" AS t0 
+                UNION ALL 
+                SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS person FROM "Customers" AS t0) 
+                AS anon_1'''
+#            '''SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as person FROM "Employees" AS t0
+#            UNION SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0'''
+            )
+
+    def test_union3(self):
+        self.check('''select ?person_or_supplier { 
+                   { ?person_or_supplier a Demo:Employees } UNION { ?person_or_supplier a Demo:Customers } UNION { ?person_or_supplier a Demo:Suppliers }
+                   }''',
+            '''SELECT anon_1.person_or_supplier AS person_or_supplier FROM 
+                (SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") AS person_or_supplier FROM "Employees" AS t0 
+                UNION ALL 
+                SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS person_or_supplier FROM "Customers" AS t0
+                UNION ALL
+                SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as person_or_supplier FROM "Suppliers" AS t0) 
+                AS anon_1'''
+#            '''SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as person_or_supplier FROM "Employees" AS t0
+#            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as person_or_supplier FROM "Suppliers" AS t0
+#            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as person_or_supplier FROM "Suppliers" AS t0'''
+            )
 
     def test_shared_prop(self):
         self.check('''select ?o { ?o Demo:city "Atlanta"}''',
                    '''SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") as o FROM "Customers" AS t0 WHERE t0."City" = 'Atlanta'
-                   UNION SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as o FROM "Employees" AS t0 WHERE t0."City" = 'Atlanta'
-                   UNION SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0 WHERE t0."City" = 'Atlanta' ''')
+                   UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") as o FROM "Employees" AS t0 WHERE t0."City" = 'Atlanta'
+                   UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") as o FROM "Suppliers" AS t0 WHERE t0."City" = 'Atlanta' ''')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
