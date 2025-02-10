@@ -29,11 +29,12 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import ColumnElement, CompoundSelect, Label, except_, literal, select, null, literal_column
+from sqlalchemy import Alias, ColumnElement, CompoundSelect, Label, and_, except_, literal, select, null, literal_column
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import GenerativeSelect, Select
-from sqlalchemy.sql.selectable import _CompoundSelectKeyword
+from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause
+from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine, Connection
 
 from rdflib_r2r.expr_template import NULL_SUBFORM, ExpressionTemplate, SubForm
@@ -98,7 +99,7 @@ def sql_pretty(query:SQLQuery):
     qstr = str(query.compile(compile_kwargs={"literal_binds": True}))
     return sqlparse.format(qstr, reindent=True, keyword_case="upper")
 
-def get_named_columns(query:Select) -> Dict[str,ColumnElement]:
+def get_named_columns(query:Select|CompoundSelect) -> Dict[str,ColumnElement]:
     return { col.name: col for col in query.exported_columns if isinstance(col, Label)}
 
 def results_union(queries:Sequence[SQLQuery]) -> SQLQuery:
@@ -373,23 +374,29 @@ class R2RStore(Store, ABC):
     def queryJoin(self, part) -> SQLQuery:
         query1 = self.queryPart(part.p1)
         query2 = self.queryPart(part.p2)
-        if not query1.c:
-            return SelectVarSubForm(query2, var_subform2)
-        if not query2.c:
-            return SelectVarSubForm(query1, var_subform1)
 
-        var_colforms = {}
-        cols1 = list(query1.c)
-        for v, sf1 in var_subform1.items():
-            var_colforms.setdefault(v, []).append(ExpressionTemplate.from_subform(cols1, *sf1))
-        cols2 = list(query2.c)
-        for v, sf2 in var_subform2.items():
-            var_colforms.setdefault(v, []).append(ExpressionTemplate.from_subform(cols2, *sf2))
+        j1 = query1.alias('j1')
+        j2 = query2.alias('j2')
 
-        colforms = [cfs[0] for cfs in var_colforms.values()]
-        subforms, allcols = ExpressionTemplate.to_subforms_columns(*colforms)
-        where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
-        return SelectVarSubForm(select(*allcols).where(*where), dict(zip(var_colforms, subforms)))
+        allcols = []
+        names1 = set()
+        for c in j1.exported_columns:
+            if isinstance(c, NamedColumn):
+                names1.add(c.name)
+                c = c.label(c.name)
+            allcols.append(c)
+
+        common_names = set()
+        for c in j2.exported_columns:
+            if isinstance(c, NamedColumn):
+                if c.name in names1:
+                    common_names.add(c.name)
+                    continue
+                c = c.label(c.name)
+            allcols.append(c)
+
+        wheres = [ j1.exported_columns[n] == j2.exported_columns[n] for n in common_names ]
+        return select(*allcols).where(*wheres)
 
     def queryAggregateJoin(self, agg) -> SQLQuery:
         # Assume agg.p is always a Group

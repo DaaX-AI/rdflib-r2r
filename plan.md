@@ -2,8 +2,10 @@
 
 - [v] Mapping for rdf:type.
 - [v] Support for joins (explicit via parentTriplesMap, e.g. shippers_of_order).
-- [ ] Support for properties with multiple domains (e.g., Demo:city)
-- [ ] Fix unions
+- [v] Support for properties with multiple domains (e.g., Demo:city)
+- [v] Fix unions
+- [ ] Unpack joins into BGPs
+- [ ] Support for better equality of template-based objects (concats)
 
 ### Some day
 - [ ] Support for retrieving types (triples like `(<something> a ?var)`)

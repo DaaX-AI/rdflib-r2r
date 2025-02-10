@@ -140,7 +140,27 @@ class TestR2RStore(unittest.TestCase):
                    '''SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS o FROM "Customers" AS t0 WHERE t0."City" = 'Atlanta' ''')
         
     def test_sparql_join(self):
-        self.check('''select ?cn ?cc { { ?c a Demo:Customers; Demo:companyname ?cn . } { ?c Demo:city ?cc } }''', "dunno")
+        self.check('''select ?cn ?cc { { ?c a Demo:Customers; Demo:companyname ?cn . } { ?c Demo:city ?cc } }''', 
+                    '''SELECT j1.cn AS cn, j2.cc AS cc FROM 
+                        (SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS c, 
+                            t0."CompanyName" AS cn FROM "Customers" AS t0) 
+                        AS j1, 
+                        (SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS c, 
+                                t0."City" AS cc FROM "Customers" AS t0 
+                            UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") AS c, 
+                                t0."City" AS cc FROM "Employees" AS t0 
+                            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") AS c, 
+                                t0."City" AS cc FROM "Suppliers" AS t0) 
+                        AS j2 
+                        WHERE j1.c = j2.c'''
+                    #'''SELECT j1.cn AS cn, j2.cc AS cc FROM 
+                    #   (SELECT t0."CustomerID" AS c_CustomerID, t0."CompanyName" AS cn FROM "Customers" AS t0) 
+                    #   AS j1,
+                    #   (SELECT t0."CustomerID" AS c_CustomerID, t0."City" AS cc FROM "Customers" AS t0) 
+                    #   AS j2,
+                    #   WHERE j1.c = j2.c'''
+                )
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
