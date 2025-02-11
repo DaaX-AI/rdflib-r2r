@@ -49,12 +49,16 @@ class TestR2RStore(unittest.TestCase):
         # print("Actual SQL:", actual_sql)
         self.assertEqual(norm_ws(actual_sql), norm_ws(expected_sql))
 
-    def test_concrete_order_value(self):
-        self.check(f'select ?v {{ <{OD_NS}1> Demo:freight ?v}}',
+    def test_order_value_by_id(self):
+        self.check(f'select ?v {{ ?o a Demo:Orders; Demo:orderid 1; Demo:freight ?v}}',
                    'SELECT t0."Freight" AS v FROM "Orders" AS t0\nWHERE t0."OrderID" = 1')
 
+    def test_concrete_order_value(self):
+        self.check(f'select ?v {{ <http://localhost:8890/Demo/orders/1> Demo:freight ?v}}',
+                   'SELECT t0."Freight" AS v FROM "Orders" AS t0\nWHERE t0."OrderID" = 1')
+        
     def test_concrete_order_concrete_value(self):
-        self.check(f'select (1 as ?k) {{ <{OD_NS}1> Demo:freight 3.50}}',
+        self.check(f'select (1 as ?k) {{ <http://localhost:8890/Demo/orders/1> Demo:freight 3.50}}',
                    'SELECT 1 AS k\nFROM "Orders" AS t0\nWHERE t0."OrderID" = 1 AND t0."Freight" = 3.50')
 
     def test_look_up_by_value_without_class(self):
