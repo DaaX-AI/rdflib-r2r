@@ -19,8 +19,9 @@ from rdflib.compare import to_isomorphic, graph_diff
 from rdflib.util import from_n3
 
 sys.path.append( os.path.dirname(os.path.realpath(__file__)) )
+from rdflib_r2r.r2r_mapping import mapping_from_db
 from util import setup_engine, create_database
-from rdflib_r2r import R2RStore, R2RMapping
+from rdflib_r2r import R2RStore
 
 test = Namespace("http://www.w3.org/2006/03/test-description#")
 dcterms = Namespace("http://purl.org/dc/elements/1.1/")
@@ -113,12 +114,12 @@ def test_rdb2rdf(testcase: TestCase, engine_name: str, dbecho: bool, nopattern: 
             # Load mapping
             mapfile = testcase.path.joinpath(testcase.meta[rdb2rdftest.mappingDocument])
             fmt = rdflib.util.guess_format(str(mapfile))
-            mapping = R2RMapping(rdflib.Graph().parse(str(mapfile), format=fmt))
+            mapping_graph = rdflib.Graph().parse(str(mapfile), format=fmt)
         else:
             # Make direct mapping
-            mapping = R2RMapping.from_db(db)
+            mapping_graph = mapping_from_db(db)
 
-        g_made = rdflib.Graph(R2RStore(db=db, mapping=mapping))
+        g_made = rdflib.Graph(R2RStore(db=db, mapping_graph=mapping_graph))
 
         if not rdb2rdftest.output in testcase.meta:
             tuple(g_made)

@@ -19,7 +19,7 @@ import logging
 import base64
 import re
 
-from rdflib import URIRef, Literal, BNode, Variable
+from rdflib import Graph, URIRef, Literal, BNode, Variable
 from rdflib.namespace import XSD, Namespace
 from rdflib.store import Store
 from rdflib.util import from_n3
@@ -37,7 +37,7 @@ from sqlalchemy.engine import Engine
 
 from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
 from rdflib_r2r.types import SQLQuery, BGP
-from rdflib_r2r.r2r_mapping import R2RMapping, iri_safe, toPython
+from rdflib_r2r.r2r_mapping import iri_safe, toPython
 
 @dataclass
 class SelectVarSubForm:
@@ -203,7 +203,7 @@ class R2RStore(Store, ABC):
     def __init__(
         self,
         db: Engine,
-        mapping: Optional[R2RMapping] = None,
+        mapping_graph: Graph,
         base: str = "http://example.com/base/",
         configuration=None,
         identifier=None,
@@ -212,10 +212,9 @@ class R2RStore(Store, ABC):
             configuration=configuration, identifier=identifier
         )
         self.db = db
-        self.mapping = mapping or R2RMapping.from_db(db)
+        self.mapping_graph = mapping_graph
         self.base = base
         assert self.db
-        assert self.mapping
 
     def __len__(self, context=None) -> int:
         """The number of RDF triples in the DB mapping."""

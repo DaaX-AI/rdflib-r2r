@@ -1,21 +1,17 @@
-from ast import Expr
-from curses.ascii import SP
 from dataclasses import dataclass, replace
 from io import StringIO
-import logging
 import re
 from string import Formatter
 from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
 from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable, BNode
 from rdflib.term import Node
-from rdflib.paths import Path, AlternativePath, SequencePath, InvPath, MulPath
-from sqlalchemy import Alias, CompoundSelect, types as sqltypes, MetaData
-from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.sql import Select, ColumnElement, select, literal_column, literal, func as sqlfunc
-from sqlalchemy.sql.selectable import NamedFromClause, FromClauseAlias, FromClause
-from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
-from rdflib_r2r.r2r_mapping import R2RMapping, _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, SelectVarSubForm, iter_opt, results_union, sql_and
+from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
+from sqlalchemy import Alias, types as sqltypes, MetaData
+from sqlalchemy.engine import Engine
+from sqlalchemy.sql import ColumnElement, select, literal_column, literal, func as sqlfunc
+from sqlalchemy.sql.selectable import NamedFromClause, FromClause
+from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
+from rdflib_r2r.r2r_store import R2RStore, iter_opt, results_union, sql_and
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -39,7 +35,7 @@ class ProcessingState:
 
     def ensure_row(self, s:Node, triple_map:Node) -> "Optional[ProcessingState]":
         row = self.rows.get(s, None)
-        tab = _get_table(self.store.mapping.graph, triple_map)
+        tab = _get_table(self.store.mapping_graph, triple_map)
         tab = self.store.metadata.tables[tab.name]
         if not row:
             row = Row(subject=s, table=tab.alias("t"+str(len(self.rows))))
@@ -142,18 +138,17 @@ class NewR2rStore(R2RStore):
     pomaps_by_predicate: Dict[URIRef|None, List[Node]]
     metadata:MetaData
 
-    def __init__(self, db: Engine, mapping: R2RMapping | None = None, base: str = "http://example.com/base/", configuration=None, identifier=None):
-        super().__init__(db, mapping, base, configuration, identifier)
+    def __init__(self, db: Engine, mapping_graph: Graph, base: str = "http://example.com/base/", configuration=None, identifier=None):
+        super().__init__(db, mapping_graph, base, configuration, identifier)
         self.pomaps_by_predicate = {}
-        for pms in self.mapping.ppat_pomaps.values():
+        for pm in self.mapping_graph.objects(predicate=rr.predicateObjectMap, unique=True):
             found = False
-            for pm in pms:
-                for const in self.mapping.graph.objects(pm, AlternativePath(rr.predicate, SequencePath(rr.predicateMap, rr.constant))):
-                    if isinstance(const, URIRef):
-                        self.pomaps_by_predicate.setdefault(const, []).append(pm)
-                        found = True
-                    else:
-                        raise ValueError("Non-URI predicate")
+            for const in self.mapping_graph.objects(pm, AlternativePath(rr.predicate, SequencePath(rr.predicateMap, rr.constant))):
+                if isinstance(const, URIRef):
+                    self.pomaps_by_predicate.setdefault(const, []).append(pm)
+                    found = True
+                else:
+                    raise ValueError("Non-URI predicate")
             if not found:
                 raise NotImplementedError("TODO (2): Only constant predicates are supported in predicateObjectMaps")
         self.metadata = MetaData()
@@ -180,7 +175,7 @@ class NewR2rStore(R2RStore):
                         q.put(nst)
 
         if not resulting_states:
-            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping.graph) for t in bgp]}")
+            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping_graph) for t in bgp]}")
         
         query_elements = []
         for rs in resulting_states:
@@ -193,7 +188,7 @@ class NewR2rStore(R2RStore):
         return results_union(query_elements)
     
     def process_next_triple(self, st: ProcessingState) -> Generator[ProcessingState, None, None]:
-        mg = self.mapping.graph
+        mg = self.mapping_graph
         s, p, o = st.triples[0]
         assert s
         assert p 
@@ -223,7 +218,7 @@ class NewR2rStore(R2RStore):
 
     def match_node_to_term_map(self, node:Node, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
                 tab:NamedFromClause) -> Generator[ProcessingState, None, None]:
-        mg = self.mapping.graph
+        mg = self.mapping_graph
         if position == "S":
             map_property = rr.subjectMap
             shortcut_property = rr.subject

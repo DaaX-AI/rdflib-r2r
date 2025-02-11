@@ -22,7 +22,7 @@ from rdflib.util import from_n3
 
 sys.path.append( os.path.dirname(os.path.realpath(__file__)) )
 from util import setup_engine, create_database
-from rdflib_r2r import R2RStore, R2RMapping, optimize_sparql, reset_sparql
+from rdflib_r2r import R2RStore, optimize_sparql, reset_sparql
 from sqlalchemy.engine import Engine
 
 
@@ -156,10 +156,10 @@ def test_bsbm(testcase: TestCase, engine_name: str, path, dbs):
     try:
         db = dbs[engine_name]
 
-        mapping = R2RMapping(rdflib.Graph().parse("tests/bsbm.ttl", format="ttl"))
-        ns = mapping.graph.namespace_manager
+        mapping_graph = rdflib.Graph().parse("tests/bsbm.ttl", format="ttl")
+        ns = mapping_graph.namespace_manager
 
-        graph_rdb = rdflib.Graph(R2RStore(db=db, mapping=mapping), namespace_manager=ns)
+        graph_rdb = rdflib.Graph(R2RStore(db=db, mapping_graph=mapping_graph), namespace_manager=ns)
 
         graph = rdflib.Graph()
         for t in graph_rdb:

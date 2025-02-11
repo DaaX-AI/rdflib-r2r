@@ -6,7 +6,6 @@ from sqlalchemy import create_engine, Engine, Connection, text
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 from rdflib_r2r.new_r2r_store import NewR2rStore, resolve_paths_in_triples
-from rdflib_r2r.r2r_mapping import R2RMapping
 from rdflib_r2r.types import SearchQuery
 from rdflib.paths import SequencePath, AlternativePath, InvPath, MulPath
 
@@ -22,7 +21,7 @@ class TestR2RStore(unittest.TestCase):
 
     db: Engine
     conn: Connection
-    mapping: R2RMapping
+    mapping_graph: Graph
     ns_map: Mapping[str, URIRef]
 
     @staticmethod
@@ -32,17 +31,15 @@ class TestR2RStore(unittest.TestCase):
         with open('tests/northwind/Northwind.sql') as f:
             for stmt in f.read().split(';'):
                 target.conn.execute(text(stmt))
-        r2rg = Graph()
-        r2rg.parse('tests/northwind/NorthwindR2RML.ttl')
-        target.mapping = R2RMapping(r2rg)
+        target.mapping_graph = Graph().parse('tests/northwind/NorthwindR2RML.ttl')
         target.ns_map = {}
-        for prefix, ns in r2rg.namespaces():
+        for prefix, ns in target.mapping_graph.namespaces():
             target.ns_map[prefix] = URIRef(ns)
         
 
     def setUp(self):
         TestR2RStore.setup_db(self)
-        self.store = NewR2rStore(self.db, self.mapping)
+        self.store = NewR2rStore(self.db, self.mapping_graph)
         self.maxDiff = None
 
     def check(self, sparql:str, expected_sql:str|None):
