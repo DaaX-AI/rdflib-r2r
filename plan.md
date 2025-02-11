@@ -15,3 +15,4 @@
 - [ ] Support for OPTIONAL
 - [ ] Support for FILTER NOT EXISTS
 - [ ] Support for opt paths
+- [ ] Check that the IN op works when the set elements are not literals
