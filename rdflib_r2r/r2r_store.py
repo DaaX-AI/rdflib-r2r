@@ -27,10 +27,10 @@ from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 import sqlalchemy.sql.operators
-from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect
+from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect, Subquery
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
-from sqlalchemy.sql.expression import Select
+from sqlalchemy.sql.expression import Select, distinct
 from sqlalchemy.sql.selectable import _CompoundSelectKeyword
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
@@ -97,7 +97,7 @@ def sql_pretty(query:SQLQuery, dialect:Optional[Dialect] = None) -> str:
     qstr = str(query.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
     return sqlparse.format(qstr, reindent=True, keyword_case="upper")
 
-def get_named_columns(query:Select|CompoundSelect) -> Dict[str,ColumnElement]:
+def get_named_columns(query:Select|CompoundSelect|Subquery) -> Dict[str,ColumnElement]:
     return { col.name: col for col in query.exported_columns if isinstance(col, Label)}
 
 def results_union(queries:Sequence[SQLQuery]) -> SQLQuery:
@@ -288,15 +288,19 @@ class R2RStore(Store, ABC):
             "Aggregate_GroupConcat": sqlfunc.group_concat_node,
         }
         if hasattr(expr, "name") and (expr.name in agg_funcs):
+            if expr.name == "Aggregate_Count" and expr.vars == '*':
+                return sqlfunc.count()
             sub = self.queryExpr(expr.vars, var_cf)
             if expr.name == "Aggregate_Sample":
                 return sub
             func = agg_funcs[expr.name]
-            if (len(sub.cols) == 1) and (expr.name == "Aggregate_Count"):
-                # Count queries don't need full node expression
-                return func(sub.cols[0])
-            else:
-                return func(sub.expr())
+            # if (len(sub.cols) == 1) and (expr.name == "Aggregate_Count"):
+            #     # Count queries don't need full node expression
+            #     return func(sub.cols[0])
+            # else:
+            if expr.distinct == 'DISTINCT':
+                sub = distinct(sub)
+            return func(sub)
 
         if hasattr(expr, "name") and (expr.name == "RelationalExpression"):
             if expr.op == "IN":
@@ -411,22 +415,16 @@ class R2RStore(Store, ABC):
     def queryAggregateJoin(self, agg) -> SQLQuery:
         # Assume agg.p is always a Group
         group_expr, group_part = agg.p.expr, agg.p.p
-        part_query, var_subform = self.queryPart(group_part)
-        cols = part_query.c
-        var_cf = {v: ExpressionTemplate.from_subform(cols, *sf) for v, sf in var_subform.items()}
+        part_query = self.queryPart(group_part)
+        named_cols = get_named_columns(part_query)
 
         # Get aggregate column expressions
-        var_agg = {a.res: self.queryExpr(a, var_cf) for a in agg.A}
-        groups = [
-            c
-            for e in (group_expr or [])
-            for c in self.queryExpr(e, var_cf).cols
-            if type(c) != str
+        aggs = [ self.queryExpr(a, named_cols).label(str(a.res)) for a in agg.A ]
+        groups = [ 
+            self.queryExpr(ge, named_cols) for ge in (group_expr or [])
         ]
 
-        subforms, allcols = ExpressionTemplate.to_subforms_columns(*var_agg.values())
-        query = select(*allcols).group_by(*groups)
-        return SelectVarSubForm(query, dict(zip(var_agg, subforms)))
+        return as_select(part_query).with_only_columns(*aggs).group_by(*groups)
 
     def queryExtend(self, part) -> SQLQuery:
         part_query = self.queryPart(part.p)

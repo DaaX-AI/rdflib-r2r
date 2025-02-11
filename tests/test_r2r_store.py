@@ -197,7 +197,23 @@ class TestR2RStore(unittest.TestCase):
     def test_in_op(self):
         self.check('''select (1 in (1,2,3) as ?itsin) {}''', 'SELECT 1 IN (1, 2, 3) AS itsin')
 
-N3_PREFIX='@prefix : <http://localhost:8890/Demo/> .\n'
+    def test_aggregate_join(self):
+        self.check('''select ?shid (sum(?fr) as ?total_fr) { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders / Demo:freight ?fr. } group by ?shid''',
+                   '''SELECT t0."ShipperID" AS shid, sum(t1."Freight") AS total_fr 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID"''')
+
+    def test_aggregate_join_count(self):
+        self.check('''select ?shid (count(distinct ?city) as ?city_count) { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders / Demo:shipcity ?city. } group by ?shid''',
+                   '''SELECT t0."ShipperID" AS shid, count(DISTINCT t1."ShipCity") AS city_count 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID"''')
+
+    def test_aggregate_join_count_star(self):
+        self.check('''select ?shid (count(*) as ?combo_count) { ?sh Demo:shipperid ?shid; Demo:shippers_of_orders / Demo:shipcity ?city. } group by ?shid''',
+                   '''SELECT t0."ShipperID" AS shid, count(*) AS combo_count 
+                   FROM "Shippers" AS t0, "Orders" AS t1 
+                   WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID"''')
 
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
