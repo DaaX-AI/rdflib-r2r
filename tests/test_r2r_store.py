@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, Engine, Connection, text
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 from rdflib_r2r.new_r2r_store import NewR2rStore, resolve_paths_in_triples
+from rdflib_r2r.r2r_store import SQL_FUNC
 from rdflib_r2r.types import SearchQuery
 from rdflib.paths import SequencePath, AlternativePath, InvPath, MulPath
 
@@ -36,6 +37,7 @@ class TestR2RStore(unittest.TestCase):
         for prefix, ns in target.mapping_graph.namespaces():
             target.ns_map[prefix] = URIRef(ns)
         
+        target.ns_map['sqlf'] = SQL_FUNC
 
     def setUp(self):
         TestR2RStore.setup_db(self)
@@ -47,7 +49,7 @@ class TestR2RStore(unittest.TestCase):
         # print("Expected SQL:", expected_sql)
         actual_sql = self.store.getSQL(sparql, initNs=self.ns_map)
         # print("Actual SQL:", actual_sql)
-        self.assertEqual(norm_ws(actual_sql), norm_ws(expected_sql))
+        self.assertEqual(norm_ws(expected_sql), norm_ws(actual_sql))
 
     def test_order_value_by_id(self):
         self.check(f'select ?v {{ ?o a Demo:Orders; Demo:orderid 1; Demo:freight ?v}}',
@@ -215,6 +217,18 @@ class TestR2RStore(unittest.TestCase):
                    '''SELECT t0."ShipperID" AS shid, count(*) AS combo_count 
                    FROM "Shippers" AS t0, "Orders" AS t1 
                    WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID"''')
+        
+    def test_regex_to_like(self):
+        self.check('''select ?city { ?o Demo:shipcity ?city. filter regex(?city, "^.A[b-c][^d-f%*].*$", "is") }''',
+                   '''SELECT t0."ShipCity" AS city 
+                   FROM "Orders" AS t0 
+                   WHERE t0."ShipCity" LIKE '_A[b-c][^d-f%*]%' ''')
+        
+    def test_sql_func(self):
+        self.check('''select ?city { ?o Demo:shipcity ?city. filter (sqlf:LOWER(?city) = "atlanta") }''',
+                   '''SELECT t0."ShipCity" AS city 
+                   FROM "Orders" AS t0 
+                   WHERE LOWER(t0."ShipCity") = 'atlanta' ''')
 
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):

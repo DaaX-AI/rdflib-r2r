@@ -14,6 +14,7 @@ The mapped SQL database as an RDF graph store object
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from io import StringIO
 from typing import Any, Generator, Mapping, Optional, List, Dict, cast, TypeVar, Sequence
 import logging
 import base64
@@ -90,6 +91,7 @@ XSDToSQL = {
     XSD.anyURI: None,
 }
 
+SQL_FUNC = Namespace("http://daax.ai/sqlfunc/")
 
 def sql_pretty(query:SQLQuery, dialect:Optional[Dialect] = None) -> str:
     import sqlparse
@@ -193,6 +195,47 @@ Element = TypeVar("Element")
 def iter_opt(o:Optional[Element]) -> Generator[Element,None,None]:
     if o is not None:
         yield o
+
+def convert_pattern_to_like(regex:str) -> str:
+    like = StringIO()
+    i = 0
+    if not regex.endswith('$') or not regex.startswith('^'):
+        raise ValueError("Only anchored regexes can be converted to LIKE patterns")
+    regex = regex[1:-1]
+    while i < len(regex):
+        c = regex[i]
+        if c == '.':
+            if i+1 < len(regex) and regex[i+1] == '*':
+                like.write('%')
+                i += 1
+            else:
+                like.write('_')
+        elif c == '\\':
+            if regex[i+1].isdigit():
+                raise ValueError("Groups not supported in LIKE patterns")
+            like.write('[')
+            like.write(regex[i+1])
+            like.write(']')
+            i += 1
+        elif c in { '^', '$', '*', '+', '?', '{', '}', '|', '(', ')'}:
+            raise ValueError(f"Unsupported regex character: {c}")
+        elif c == '[':
+            like.write('[')
+
+            i += 1
+            while i < len(regex) and regex[i] != ']':
+                like.write(regex[i])
+                i += 1
+            if regex[i] == ']':
+                like.write(']')
+            else:
+                raise ValueError("Unmatched '[' in regex")
+        else:
+            like.write(c)
+
+        i += 1
+
+    return like.getvalue()
 
 class R2RStore(Store, ABC):
     """
@@ -332,6 +375,12 @@ class R2RStore(Store, ABC):
                 for e in expr.expr:
                     cf = self.queryExpr(e, var_cf)
                     return sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
+            if expr.iri.startswith(SQL_FUNC):
+                func_name = expr.iri[len(SQL_FUNC):]
+                func = getattr(sqlfunc, func_name, None)
+                if func is None:
+                    raise SparqlNotImplementedError(f"SQL function not implemented: {expr.iri}")
+                return func(*[self.queryExpr(e, var_cf) for e in expr.expr])
 
         if hasattr(expr, "name") and (expr.name == "UnaryNot"):
             cf = self.queryExpr(expr.expr, var_cf)
@@ -340,6 +389,19 @@ class R2RStore(Store, ABC):
         if hasattr(expr, "name") and (expr.name == "Builtin_BOUND"):
             cf = self.queryExpr(expr.arg, var_cf)
             return sqlfunc.not_(cf.is_(None))
+        
+        if hasattr(expr, "name") and (expr.name == "Builtin_REGEX"):
+            if set(expr.flags) != {"i","s"}:
+                raise SparqlNotImplementedError("We only support case-insensitive, dotall regexes")
+            if not isinstance(expr.pattern, Literal):
+                raise SparqlNotImplementedError("Non-literal regex pattern not supported")
+            try:
+                like_pattern = convert_pattern_to_like(expr.pattern.toPython())
+            except ValueError as e:
+                raise SparqlNotImplementedError(f"Cannot convert regex pattern to like pattern `{expr.pattern}`: {str(e)}") from e
+            
+            cf = self.queryExpr(expr.text, var_cf)
+            return cf.like(like_pattern)
 
         if isinstance(expr, Variable):
             result = var_cf.get(str(expr),None)
