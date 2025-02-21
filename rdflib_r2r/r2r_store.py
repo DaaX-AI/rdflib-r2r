@@ -331,86 +331,88 @@ class R2RStore(Store, ABC):
             "Aggregate_Max": sqlfunc.max,
             "Aggregate_GroupConcat": sqlfunc.group_concat_node,
         }
-        if hasattr(expr, "name") and (expr.name in agg_funcs):
-            if expr.name == "Aggregate_Count" and expr.vars == '*':
-                return sqlfunc.count()
-            sub = self.queryExpr(expr.vars, var_cf)
-            if expr.name == "Aggregate_Sample":
-                return sub
-            func = agg_funcs[expr.name]
-            # if (len(sub.cols) == 1) and (expr.name == "Aggregate_Count"):
-            #     # Count queries don't need full node expression
-            #     return func(sub.cols[0])
-            # else:
-            if expr.distinct == 'DISTINCT':
-                sub = distinct(sub)
-            return func(sub)
+        if hasattr(expr, "name"):
 
-        if hasattr(expr, "name") and (expr.name == "RelationalExpression"):
-            if expr.op == "IN":
+            if (expr.name in agg_funcs):
+                if expr.name == "Aggregate_Count" and expr.vars == '*':
+                    return sqlfunc.count()
+                sub = self.queryExpr(expr.vars, var_cf)
+                if expr.name == "Aggregate_Sample":
+                    return sub
+                func = agg_funcs[expr.name]
+                # if (len(sub.cols) == 1) and (expr.name == "Aggregate_Count"):
+                #     # Count queries don't need full node expression
+                #     return func(sub.cols[0])
+                # else:
+                if expr.distinct == 'DISTINCT':
+                    sub = distinct(sub)
+                return func(sub)
+
+            if (expr.name == "RelationalExpression"):
+                if expr.op == "IN":
+                    a = self.queryExpr(expr.expr, var_cf)
+                    b = [ self.queryExpr(elt, var_cf) for elt in expr.other ]
+                    return a.in_(b)
                 a = self.queryExpr(expr.expr, var_cf)
-                b = [ self.queryExpr(elt, var_cf) for elt in expr.other ]
-                return a.in_(b)
-            a = self.queryExpr(expr.expr, var_cf)
-            b = self.queryExpr(expr.other, var_cf)
-            return op(expr.op, a, b)
+                b = self.queryExpr(expr.other, var_cf)
+                return op(expr.op, a, b)
 
-        math_expr_names = ["MultiplicativeExpression", "AdditiveExpression"]
-        if hasattr(expr, "name") and (expr.name in math_expr_names):
-            # TODO: ternary ops?
-            a = self.queryExpr(expr.expr, var_cf)
-            for other in expr.other:
-                b = self.queryExpr(other, var_cf)
-                return op(expr.op[0], a, b)
+            math_expr_names = ["MultiplicativeExpression", "AdditiveExpression"]
+            if (expr.name in math_expr_names):
+                # TODO: ternary ops?
+                a = self.queryExpr(expr.expr, var_cf)
+                for other in expr.other:
+                    b = self.queryExpr(other, var_cf)
+                    return op(expr.op[0], a, b)
 
-        if hasattr(expr, "name") and (expr.name == "ConditionalAndExpression"):
-            exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
-            return sql_and(*exprs)
+            if (expr.name == "ConditionalAndExpression"):
+                exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
+                return sql_and(*exprs)
 
-        if hasattr(expr, "name") and (expr.name == "ConditionalOrExpression"):
-            exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
-            return sql_or(*exprs)
+            if (expr.name == "ConditionalOrExpression"):
+                exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]
+                return sql_or(*exprs)
 
-        if hasattr(expr, "name") and (expr.name == "Function"):
-            # TODO: it would be super cool to do UDFs here
-            if expr.iri in XSDToSQL:
-                for e in expr.expr:
-                    cf = self.queryExpr(e, var_cf)
-                    return sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
-            if expr.iri.startswith(SQL_FUNC):
-                func_name = expr.iri[len(SQL_FUNC):]
-                func = getattr(sqlfunc, func_name, None)
-                if func is None:
-                    raise SparqlNotImplementedError(f"SQL function not implemented: {expr.iri}")
-                return func(*[self.queryExpr(e, var_cf) for e in expr.expr])
+            if (expr.name == "Function"):
+                # TODO: it would be super cool to do UDFs here
+                if expr.iri in XSDToSQL:
+                    for e in expr.expr:
+                        cf = self.queryExpr(e, var_cf)
+                        return sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
+                if expr.iri.startswith(SQL_FUNC):
+                    func_name = expr.iri[len(SQL_FUNC):]
+                    func = getattr(sqlfunc, func_name, None)
+                    if func is None:
+                        raise SparqlNotImplementedError(f"SQL function not implemented: {expr.iri}")
+                    return func(*[self.queryExpr(e, var_cf) for e in expr.expr])
 
-        if hasattr(expr, "name") and (expr.name == "UnaryNot"):
-            cf = self.queryExpr(expr.expr, var_cf)
-            return sqlalchemy.not_(cf) 
-        
-        if hasattr(expr, "name") and (expr.name == "Builtin_BOUND"):
-            cf = self.queryExpr(expr.arg, var_cf)
-            return sqlfunc.not_(cf.is_(None))
-        
-        if hasattr(expr, "name") and (expr.name == "Builtin_REGEX"):
-            if set(expr.flags) != {"i","s"}:
-                raise SparqlNotImplementedError("We only support case-insensitive, dotall regexes")
-            if not isinstance(expr.pattern, Literal):
-                raise SparqlNotImplementedError("Non-literal regex pattern not supported")
-            try:
-                like_pattern = convert_pattern_to_like(expr.pattern.toPython())
-            except ValueError as e:
-                raise SparqlNotImplementedError(f"Cannot convert regex pattern to like pattern `{expr.pattern}`: {str(e)}") from e
+            if (expr.name == "UnaryNot"):
+                cf = self.queryExpr(expr.expr, var_cf)
+                return sqlalchemy.not_(cf) 
             
-            cf = self.queryExpr(expr.text, var_cf)
-            return cf.like(like_pattern)
-        if hasattr(expr, "name") and (expr.name == "Builtin_IF"):
-            cases = []
-            if_expr = expr
-            while hasattr(if_expr, "name") and (if_expr.name == "Builtin_IF"):
-                cases.append((self.queryExpr(if_expr.arg1, var_cf), self.queryExpr(if_expr.arg2, var_cf)))
-                if_expr = if_expr.arg3
-            return case(*cases, else_=self.queryExpr(if_expr, var_cf))
+            if (expr.name == "Builtin_BOUND"):
+                cf = self.queryExpr(expr.arg, var_cf)
+                return sqlfunc.not_(cf.is_(None))
+            
+            if (expr.name == "Builtin_REGEX"):
+                if set(expr.flags) != {"i","s"}:
+                    raise SparqlNotImplementedError("We only support case-insensitive, dotall regexes")
+                if not isinstance(expr.pattern, Literal):
+                    raise SparqlNotImplementedError("Non-literal regex pattern not supported")
+                try:
+                    like_pattern = convert_pattern_to_like(expr.pattern.toPython())
+                except ValueError as e:
+                    raise SparqlNotImplementedError(f"Cannot convert regex pattern to like pattern `{expr.pattern}`: {str(e)}") from e
+                
+                cf = self.queryExpr(expr.text, var_cf)
+                return cf.like(like_pattern)
+            if (expr.name == "Builtin_IF"):
+                cases = []
+                if_expr = expr
+                while hasattr(if_expr, "name") and (if_expr.name == "Builtin_IF"):
+                    cases.append((self.queryExpr(if_expr.arg1, var_cf), self.queryExpr(if_expr.arg2, var_cf)))
+                    if_expr = if_expr.arg3
+                return case(*cases, else_=self.queryExpr(if_expr, var_cf))
 
         if isinstance(expr, Variable):
             result = var_cf.get(str(expr),None)
@@ -460,6 +462,14 @@ class R2RStore(Store, ABC):
         return wrap_in_select(part_query)
 
     def queryJoin(self, part) -> SQLQuery:
+        def is_empty(p):
+            return p.name == "BGP" and not p.triples
+        
+        if is_empty(part.p1):
+            return self.queryPart(part.p2)
+        if is_empty(part.p2):
+            return self.queryPart(part.p1)
+        
         query1 = self.queryPart(part.p1)
         query2 = self.queryPart(part.p2)
 
