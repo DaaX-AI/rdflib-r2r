@@ -261,6 +261,15 @@ class TestR2RStore(unittest.TestCase):
             GROUP BY t0."OrderDate", t0."ShipCity") AS anon_1
     ''')
         
+    @unittest.expectedFailure
+    def test_exists(self):
+        self.check(
+            '''select ?sid { ?s a Demo:Shippers. ?s Demo:shipperid ?sid. filter exists { ?s Demo:shippers_of_orders ?o. ?o a Demo:Orders. } }''',
+            '''SELECT t0."ShipperID" AS sid
+            FROM "Shippers" AS t0 
+            WHERE EXISTS (SELECT * FROM "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia")'''
+        )
+        
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
         actual_triples_lists = list(resolve_paths_in_triples(triples))
