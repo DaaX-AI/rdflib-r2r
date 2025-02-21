@@ -157,10 +157,12 @@ def project_query(query:SQLQuery, names:Sequence[str]):
 
 
 def as_select(query:SQLQuery) ->Select:
-    if isinstance(query, CompoundSelect):
-        sq = query.subquery()
-        query = select(*[col.label(col.key) for col in sq.exported_columns])
-    return query
+    return query if isinstance(query, Select) else wrap_in_select(query)
+
+def wrap_in_select(query:SQLQuery) -> Select:
+    sq = query.subquery()
+    return select(*[col.label(col.key) for col in sq.exported_columns])
+
 
 def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
     if expressions:
@@ -452,6 +454,10 @@ class R2RStore(Store, ABC):
             return part_query.having(clause)
         else:
             return part_query.where(clause)
+        
+    def queryToMultiset(self, part) -> SQLQuery:   
+        part_query = self.queryPart(part.p)
+        return wrap_in_select(part_query)
 
     def queryJoin(self, part) -> SQLQuery:
         query1 = self.queryPart(part.p1)
@@ -579,8 +585,7 @@ class R2RStore(Store, ABC):
         if part.name == "AggregateJoin":
             return self.queryAggregateJoin(part)
         if part.name == "ToMultiSet":
-            # no idea what this should do
-            return self.queryPart(part.p)
+            return self.queryToMultiset(part)
         if part.name == "Minus":
             q1 = self.queryPart(part.p1)
             q2 = self.queryPart(part.p2)

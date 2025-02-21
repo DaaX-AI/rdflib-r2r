@@ -254,13 +254,12 @@ class TestR2RStore(unittest.TestCase):
         }
         ''',
         '''
-        SELECT max(t1.TotalFreight) AS "Highest_Freight_Amount" 
-        FROM (
-            SELECT SUM(oh.Freight) AS TotalFreight
+        SELECT max(anon_1."Total_Freight") AS "Highest_Freight_Amount" 
+        FROM (SELECT t0."OrderDate" AS "oh_OrderDate", t0."ShipCity" AS "oh_ShipCity", sum(t0."Freight") AS "Total_Freight" 
             FROM "Orders" AS t0 
             WHERE (t0."OrderDate" >= '2023-08-01') AND (t0."OrderDate" <= '2024-07-31') 
-            GROUP BY t0."OrderDate", t0."ShipCity"
-        ) as t1 ''')
+            GROUP BY t0."OrderDate", t0."ShipCity") AS anon_1
+    ''')
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
