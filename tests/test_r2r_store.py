@@ -234,6 +234,34 @@ class TestR2RStore(unittest.TestCase):
         self.check('''SELECT (IF(4 > 3, "Yes", IF(3 < 4, "Whut", "No")) AS ?r) { }''',
                    '''SELECT CASE WHEN (4 > 3) THEN 'Yes' WHEN (3 < 4) THEN 'Whut' ELSE 'No' END AS r''')
         
+    # For issue #2
+    def test_disappearing_select(self):
+        self.check(
+        '''
+        SELECT (MAX(?Total_Freight) AS ?Highest_Freight_Amount)
+        {
+            {
+                SELECT ?oh_OrderDate ?oh_ShipCity (SUM(?oh_Freight) AS ?Total_Freight)
+                {
+                    FILTER (?oh_OrderDate >= "2023-08-01" && ?oh_OrderDate <= "2024-07-31")
+                    ?oh a Demo:Orders.
+                    ?oh Demo:orderdate ?oh_OrderDate.
+                    ?oh Demo:shipcity ?oh_ShipCity.
+                    ?oh Demo:freight ?oh_Freight.
+                }
+                GROUP BY ?oh_OrderDate ?oh_ShipCity
+            }
+        }
+        ''',
+        '''
+        SELECT max(t1.TotalFreight) AS "Highest_Freight_Amount" 
+        FROM (
+            SELECT SUM(oh.Freight) AS TotalFreight
+            FROM "Orders" AS t0 
+            WHERE (t0."OrderDate" >= '2023-08-01') AND (t0."OrderDate" <= '2024-07-31') 
+            GROUP BY t0."OrderDate", t0."ShipCity"
+        ) as t1 ''')
+        
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
         actual_triples_lists = list(resolve_paths_in_triples(triples))
