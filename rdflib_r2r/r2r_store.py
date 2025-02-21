@@ -31,7 +31,7 @@ import sqlalchemy.sql.operators
 from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect, Subquery
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
-from sqlalchemy.sql.expression import Select, distinct, case
+from sqlalchemy.sql.expression import Select, distinct, case, Function, ClauseElement
 from sqlalchemy.sql.selectable import _CompoundSelectKeyword
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
@@ -154,6 +154,46 @@ def project_query(query:SQLQuery, names:Sequence[str]):
         cols.append(nc if nc is not None else null().label(vn))
 
     return query.with_only_columns(*cols)
+
+def is_simple_select(stmt:SQLQuery) -> bool:
+    if not isinstance(stmt, Select):
+        stmt = as_select(stmt)
+    
+    aggregation_funcs = {sqlfunc.sum, sqlfunc.avg, sqlfunc.count, sqlfunc.min, sqlfunc.max, sqlfunc.group_concat_node}
+
+    # Check if an expression involves any aggregation
+    def has_aggregation_expression(expr):
+        if isinstance(expr, Function):
+            return isinstance(expr, tuple(aggregation_funcs))
+        elif isinstance(expr, ClauseElement):
+            # Check if any sub-expression or nested function has aggregation
+            for sub_expr in expr.get_children():
+                if has_aggregation_expression(sub_expr):
+                    return True
+        return False
+
+    # Check if the query has aggregation
+    if any(has_aggregation_expression(col) for col in stmt.columns):
+        return False
+
+    # Check for GROUP BY clauses
+    if len(stmt._group_by_clauses) > 0:
+        return False
+
+    # Check for LIMIT/OFFSET
+    if stmt._limit is not None or stmt._offset is not None:
+        return False
+    
+    if stmt._fetch_clause is not None:
+        return False
+    
+    if len(stmt._having_criteria) > 0:
+        return False
+    
+    if stmt._distinct:
+        return False
+
+    return True
 
 
 def as_select(query:SQLQuery) ->Select:
@@ -459,7 +499,10 @@ class R2RStore(Store, ABC):
         
     def queryToMultiset(self, part) -> SQLQuery:   
         part_query = self.queryPart(part.p)
-        return wrap_in_select(part_query)
+        if is_simple_select(part_query):
+            return part_query
+        else:
+            return wrap_in_select(part_query)
 
     def queryJoin(self, part) -> SQLQuery:
         def is_empty(p):

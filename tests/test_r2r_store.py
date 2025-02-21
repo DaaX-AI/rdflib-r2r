@@ -269,6 +269,82 @@ class TestR2RStore(unittest.TestCase):
             FROM "Shippers" AS t0 
             WHERE EXISTS (SELECT * FROM "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia")'''
         )
+
+    def test_join_two_selects(self):
+        self.check('''select ?cn ?cc { 
+                   {
+                    select ?c ?cn  { 
+                        ?c a Demo:Customers; Demo:companyname ?cn.  
+                    }
+                   }
+                   {
+                    select ?c ?cc  { 
+                        ?c Demo:city ?cc 
+                   } 
+                  }
+                }''', 
+                    '''SELECT j1.cn AS cn, j2.cc AS cc FROM 
+                        (SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS c, 
+                            t0."CompanyName" AS cn FROM "Customers" AS t0) 
+                        AS j1, 
+                        (SELECT concat('http://localhost:8890/Demo/customers/', t0."CustomerID") AS c, 
+                                t0."City" AS cc FROM "Customers" AS t0 
+                            UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', t0."EmployeeID") AS c, 
+                                t0."City" AS cc FROM "Employees" AS t0 
+                            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', t0."SupplierID") AS c, 
+                                t0."City" AS cc FROM "Suppliers" AS t0) 
+                        AS j2 
+                        WHERE j1.c = j2.c'''
+                )
+        
+    def test_join_select_with_aggregation(self):
+        self.check('''
+                select ?cn ?total_fr { 
+                    ?s a Demo:Shippers; Demo:companyname ?cn.  
+                   
+                   {
+                    select ?s (SUM(?fr) as ?total_fr)  { 
+                        ?s Demo:shippers_of_orders / Demo:freight ?fr.
+                   }
+                  }
+                }''', 
+                '''
+                SELECT j1.cn AS cn, j2.total_fr AS total_fr 
+                FROM 
+                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, t0."CompanyName" AS cn 
+                    FROM "Shippers" AS t0) AS j1, 
+                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
+                    FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS j2 
+                    WHERE j1.s = j2.s
+                ''')
+        
+    def test_join_select_with_aggregation_in_subquery(self):
+        self.check('''
+                select ?cn ?total_fr 
+                { 
+                    {
+                        select ?cn ?total_fr 
+                        {
+                            ?s a Demo:Shippers; Demo:companyname ?cn.  
+                        
+                            {
+                                select ?s (SUM(?fr) as ?total_fr)  
+                                { 
+                                    ?s Demo:shippers_of_orders / Demo:freight ?fr.
+                                }
+                            }
+                        }
+                    }
+                }''', 
+                '''
+                SELECT j1.cn AS cn, j2.total_fr AS total_fr 
+                FROM 
+                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, t0."CompanyName" AS cn 
+                    FROM "Shippers" AS t0) AS j1, 
+                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
+                    FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS j2 
+                    WHERE j1.s = j2.s
+                ''')
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
