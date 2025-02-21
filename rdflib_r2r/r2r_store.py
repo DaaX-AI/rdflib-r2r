@@ -31,7 +31,7 @@ import sqlalchemy.sql.operators
 from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect, Subquery
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
-from sqlalchemy.sql.expression import Select, distinct
+from sqlalchemy.sql.expression import Select, distinct, case
 from sqlalchemy.sql.selectable import _CompoundSelectKeyword
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
@@ -402,6 +402,13 @@ class R2RStore(Store, ABC):
             
             cf = self.queryExpr(expr.text, var_cf)
             return cf.like(like_pattern)
+        if hasattr(expr, "name") and (expr.name == "Builtin_IF"):
+            cases = []
+            if_expr = expr
+            while hasattr(if_expr, "name") and (if_expr.name == "Builtin_IF"):
+                cases.append((self.queryExpr(if_expr.arg1, var_cf), self.queryExpr(if_expr.arg2, var_cf)))
+                if_expr = if_expr.arg3
+            return case(*cases, else_=self.queryExpr(if_expr, var_cf))
 
         if isinstance(expr, Variable):
             result = var_cf.get(str(expr),None)
