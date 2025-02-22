@@ -33,15 +33,19 @@ def generate_sql(df:pandas.DataFrame, db:sqlalchemy.Engine, mapping_file:str):
                          pandas.DataFrame(results, columns=['sql2', 'message', 'status'], index=df.index)],
                          axis=1)
 
-def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[int,float,int|None,str|None]]) -> List[Tuple[int,float,int|None,str|None]]:
+def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[int,float,int|None,str|None,str|None]], 
+                      field="sql2") -> List[Tuple[int,float,int|None,str|None,str|None]]:
     """Loads the SQL queries and runs them, noting how long they took and how many results they returned."""
 
     done_ids = { r[0] for r in results }
 
     def connect() -> pyodbc.Connection:
-        return pyodbc.connect(connect_str, password=dbpass, timeout=300)
+        cxn = pyodbc.connect(connect_str, password=dbpass, timeout=300)
+        cxn.timeout = 300 # The value passes to connect above seems to be ignored?
+        return cxn
 
     conn = connect()
+    conn.execute('select 1')
     csr = conn.cursor()
     try:
 
@@ -84,13 +88,13 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                         replaced_csr = True
                 
 
-        for id, (sql,) in df[["sql2"]].iterrows():
+        for id, (sql,) in df[[field]].iterrows():
             assert isinstance(id,int)
             if id in done_ids:
                 continue
 
             if not sql or not isinstance(sql, str):
-                results.append((id, float("nan"), None, None))
+                results.append((id, float("nan"), None, None, None))
                 continue
 
             result_count=None
@@ -102,7 +106,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 result_count = len(qrs)
                 
                 print(f'Q{id}: {t1-t0}, {result_count} results, first {qrs[0]}')
-                results.append((id, t1-t0, result_count, err))
+                results.append((id, t1-t0, result_count, err, str(qrs[0])))
                 done_ids.add(id)
             except KeyboardInterrupt:
                 break
@@ -111,7 +115,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
             except Exception as e:
                 t1 = time.time()
                 err=str(e)
-                results.append((id, t1-t0, result_count, err))
+                results.append((id, t1-t0, result_count, err, None))
                 done_ids.add(id)
             finally:
                 try:
@@ -119,7 +123,8 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 except:
                     recover()
 
-            print(results[-1])
+            rlast = results[-1]
+            logging.info(f"Q{rlast[0]}: {rlast[1]}, {rlast[2]} results, error: {rlast[3] or 'None'}, first: {rlast[4] or 'None'}")
 
         return results
     
