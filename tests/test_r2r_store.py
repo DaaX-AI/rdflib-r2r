@@ -346,6 +346,10 @@ class TestR2RStore(unittest.TestCase):
                     WHERE j1.s = j2.s
                 ''')
         
+    def test_if(self):
+        self.check('''SELECT (IF(4 > 3, "Yes", IF(3 < 4, "Whut", "No")) AS ?r) { }''',
+                   '''SELECT CASE WHEN (4 > 3) THEN 'Yes' WHEN (3 < 4) THEN 'Whut' ELSE 'No' END AS r''')
+        
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
         actual_triples_lists = list(resolve_paths_in_triples(triples))
