@@ -308,13 +308,15 @@ class TestR2RStore(unittest.TestCase):
                    }
                   }
                 }''', 
+                #XXX We should be able to get rid of the anon1 select layer...
                 '''
                 SELECT j1.cn AS cn, j2.total_fr AS total_fr 
                 FROM 
                 (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, t0."CompanyName" AS cn 
                     FROM "Shippers" AS t0) AS j1, 
-                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
-                    FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS j2 
+                (SELECT anon_1.s AS s, anon_1.total_fr AS total_fr FROM
+                    (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
+                    FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS anon_1) AS j2 
                     WHERE j1.s = j2.s
                 ''')
         
@@ -336,13 +338,15 @@ class TestR2RStore(unittest.TestCase):
                         }
                     }
                 }''', 
+                #XXX We should be able to get rid of the anon1 select layer...
                 '''
                 SELECT j1.cn AS cn, j2.total_fr AS total_fr 
                 FROM 
                 (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, t0."CompanyName" AS cn 
                     FROM "Shippers" AS t0) AS j1, 
-                (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
-                    FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS j2 
+                (SELECT anon_1.s AS s, anon_1.total_fr AS total_fr FROM
+                    (SELECT concat('http://localhost:8890/Demo/shippers/', t0."ShipperID") AS s, sum(t1."Freight") AS total_fr 
+                        FROM "Shippers" AS t0, "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia") AS anon_1) AS j2 
                     WHERE j1.s = j2.s
                 ''')
         
@@ -373,6 +377,30 @@ class TestR2RStore(unittest.TestCase):
             '''SELECT t0."ShipperID" AS shid, sum(t1."Freight") AS total_fr 
                 FROM "Shippers" AS t0, "Orders" AS t1 
                 WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID" HAVING count(DISTINCT t1."OrderID") > 1''')
+        
+    def test_count_star(self):
+        self.check('''SELECT (COUNT(*) AS ?ShippersWithMoreThanFiveOrders)
+                {
+                    FILTER (?TotalOrders > 5)
+                    {
+                        SELECT ?sh_ShipperID (COUNT(?oh_OrderID) AS ?TotalOrders)
+                        {
+                        ?sh a Demo:Shippers;
+                            Demo:shipperid ?sh_ShipperID;
+                            Demo:shippers_of_orders / Demo:orderid ?oh_OrderID.
+                        }
+                        GROUP BY ?sh_ShipperID
+                    }
+                }
+                ''', 
+                '''SELECT count(*) AS "ShippersWithMoreThanFiveOrders" 
+                FROM 
+                    (SELECT t0."ShipperID" AS "sh_ShipperID", count(t1."OrderID") AS "TotalOrders" 
+                    FROM "Shippers" AS t0, "Orders" AS t1 
+                    WHERE t0."ShipperID" = t1."ShipVia" 
+                    GROUP BY t0."ShipperID") AS anon_1 
+                HAVING anon_1."TotalOrders" > 5
+                ''')
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):

@@ -159,13 +159,14 @@ def is_simple_select(stmt:SQLQuery) -> bool:
     if not isinstance(stmt, Select):
         stmt = as_select(stmt)
     
-    aggregation_funcs = {sqlfunc.sum, sqlfunc.avg, sqlfunc.count, sqlfunc.min, sqlfunc.max, sqlfunc.group_concat_node}
+    aggregation_funcs = {"sum", "avg", "count", "min", "max", "group_concat_node"}
 
     # Check if an expression involves any aggregation
     def has_aggregation_expression(expr):
-        if isinstance(expr, Function):
-            return isinstance(expr, tuple(aggregation_funcs))
-        elif isinstance(expr, ClauseElement):
+        if isinstance(expr, Function) and expr.name in aggregation_funcs:
+            return True
+
+        if isinstance(expr, ClauseElement):
             # Check if any sub-expression or nested function has aggregation
             for sub_expr in expr.get_children():
                 if has_aggregation_expression(sub_expr):
@@ -173,7 +174,7 @@ def is_simple_select(stmt:SQLQuery) -> bool:
         return False
 
     # Check if the query has aggregation
-    if any(has_aggregation_expression(col) for col in stmt.columns):
+    if any(has_aggregation_expression(col) for col in stmt.selected_columns):
         return False
 
     # Check for GROUP BY clauses
@@ -559,7 +560,7 @@ class R2RStore(Store, ABC):
             self.queryExpr(ge, named_cols) for ge in (group_expr or [])
         ]
 
-        return as_select(part_query).with_only_columns(*aggs).group_by(*groups)
+        return as_select(part_query).with_only_columns(*aggs, maintain_column_froms=True).group_by(*groups)
 
     def queryExtend(self, part) -> SQLQuery:
         part_query = self.queryPart(part.p)
