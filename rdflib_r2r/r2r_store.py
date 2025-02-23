@@ -401,9 +401,10 @@ class R2RStore(Store, ABC):
             if (expr.name in math_expr_names):
                 # TODO: ternary ops?
                 a = self.queryExpr(expr.expr, var_cf)
-                for other in expr.other:
+                for op_sym, other in zip(expr.op, expr.other):
                     b = self.queryExpr(other, var_cf)
-                    return op(expr.op[0], a, b)
+                    a = op(op_sym, a, b)
+                return a
 
             if (expr.name == "ConditionalAndExpression"):
                 exprs = [self.queryExpr(e, var_cf) for e in [expr.expr] + expr.other]

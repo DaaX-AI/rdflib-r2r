@@ -355,10 +355,17 @@ class TestR2RStore(unittest.TestCase):
             '''SELECT t0."Freight" * 1000 AS grams FROM "Orders" AS t0''')
     
     # Bug #3
-    def test_percentage(self):
+    def test_multiple_multiplicative_ops(self):
         self.check(
-            '''SELECT (SUM(?t0_Freight) / MAX(?t0_Freight) * 100 AS ?Percentage) { ?t0 a Demo:Orders. ?t0 Demo:freight ?t0_Freight. }''',
-            '''SELECT SUM(t0."Freight") / MAX(t0."Freight") * 100 AS Percentage FROM "Orders" AS t0''')
+            '''SELECT (2 * 3 / 5 AS ?Answer) {}''',
+            '''SELECT CAST((2 * 3) / 5 AS REAL) AS "Answer"''')
+        
+    def test_multiple_additive_ops(self):
+        self.check(
+            '''SELECT (2 - 3 + 5 AS ?Answer) {}''',
+            '''SELECT (2 - 3) + 5 AS "Answer"''')
+        
+
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
