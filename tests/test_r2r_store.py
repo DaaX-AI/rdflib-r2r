@@ -399,7 +399,7 @@ class TestR2RStore(unittest.TestCase):
                     FROM "Shippers" AS t0, "Orders" AS t1 
                     WHERE t0."ShipperID" = t1."ShipVia" 
                     GROUP BY t0."ShipperID") AS anon_1 
-                HAVING anon_1."TotalOrders" > 5
+                WHERE anon_1."TotalOrders" > 5
                 ''')
         
 class TestResolvePathsInTriples(unittest.TestCase):

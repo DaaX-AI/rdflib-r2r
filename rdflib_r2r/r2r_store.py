@@ -495,6 +495,8 @@ class R2RStore(Store, ABC):
 
         # Filter should be HAVING for aggregates
         def is_aggregate(p):
+            if p.name == "ToMultiSet":
+                return False # Subquery
             if p.name == "AggregateJoin":
                 return True
             if "p" not in p:
