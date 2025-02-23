@@ -109,7 +109,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 t1 = time.time()
                 result_count = len(qrs)
                 
-                results.append((id, nice_dec(t1-t0), result_count, err, str(qrs[0])))
+                results.append((id, nice_dec(t1-t0), result_count, err, str(qrs[0]) if qrs else None))
                 done_ids.add(id)
             except KeyboardInterrupt:
                 break
