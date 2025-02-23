@@ -1,3 +1,4 @@
+from decimal import Decimal
 import logging
 import time
 from typing import List, Tuple
@@ -33,8 +34,11 @@ def generate_sql(df:pandas.DataFrame, db:sqlalchemy.Engine, mapping_file:str):
                          pandas.DataFrame(results, columns=['sql2', 'message', 'status'], index=df.index)],
                          axis=1)
 
-def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[int,float,int|None,str|None,str|None]], 
-                      field="sql2") -> List[Tuple[int,float,int|None,str|None,str|None]]:
+def nice_dec(t:float) -> Decimal:
+    return Decimal(t).quantize(Decimal('0.001'))
+
+def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[int,Decimal,int|None,str|None,str|None]], 
+                      field="sql2") -> List[Tuple[int,Decimal,int|None,str|None,str|None]]:
     """Loads the SQL queries and runs them, noting how long they took and how many results they returned."""
 
     done_ids = { r[0] for r in results }
@@ -94,7 +98,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 continue
 
             if not sql or not isinstance(sql, str):
-                results.append((id, float("nan"), None, None, None))
+                results.append((id, Decimal("nan"), None, None, None))
                 continue
 
             result_count=None
@@ -105,8 +109,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 t1 = time.time()
                 result_count = len(qrs)
                 
-                print(f'Q{id}: {t1-t0}, {result_count} results, first {qrs[0]}')
-                results.append((id, t1-t0, result_count, err, str(qrs[0])))
+                results.append((id, nice_dec(t1-t0), result_count, err, str(qrs[0])))
                 done_ids.add(id)
             except KeyboardInterrupt:
                 break
@@ -115,7 +118,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
             except Exception as e:
                 t1 = time.time()
                 err=str(e)
-                results.append((id, t1-t0, result_count, err, None))
+                results.append((id, nice_dec(t1-t0), result_count, err, None))
                 done_ids.add(id)
             finally:
                 try:
