@@ -493,7 +493,14 @@ class R2RStore(Store, ABC):
         clause = self.queryExpr(part.expr, named_cols)
 
         # Filter should be HAVING for aggregates
-        if part.p.name == "AggregateJoin":
+        def is_aggregate(p):
+            if p.name == "AggregateJoin":
+                return True
+            if "p" not in p:
+                return False
+            return is_aggregate(p.p)
+        
+        if is_aggregate(part.p):
             return part_query.having(clause)
         else:
             return part_query.where(clause)

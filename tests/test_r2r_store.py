@@ -365,7 +365,14 @@ class TestR2RStore(unittest.TestCase):
             '''SELECT (2 - 3 + 5 AS ?Answer) {}''',
             '''SELECT (2 - 3) + 5 AS "Answer"''')
         
-
+    def test_having(self):
+        self.check('''select ?shid (sum(?fr) as ?total_fr) { 
+                   ?sh Demo:shipperid ?shid; Demo:shippers_of_orders ?o.
+                   ?o Demo:freight ?fr; Demo:orderid ?oid. 
+                   } group by ?shid  HAVING (COUNT(DISTINCT ?oid) > 1)''',
+            '''SELECT t0."ShipperID" AS shid, sum(t1."Freight") AS total_fr 
+                FROM "Shippers" AS t0, "Orders" AS t1 
+                WHERE t0."ShipperID" = t1."ShipVia" GROUP BY t0."ShipperID" HAVING count(DISTINCT t1."OrderID") > 1''')
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
