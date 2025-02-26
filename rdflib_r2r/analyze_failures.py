@@ -2,7 +2,7 @@ from collections import Counter
 from decimal import Decimal
 import logging
 import time
-from typing import List, Tuple
+from typing import Hashable, List, Tuple
 import pandas
 import pyodbc
 import sqlalchemy
@@ -63,8 +63,8 @@ def filter_by_message_prefix(df:pandas.DataFrame, prefix:str):
 def nice_dec(t:float) -> Decimal:
     return Decimal(t).quantize(Decimal('0.001'))
 
-def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[int,Decimal,int|None,str|None,str|None]], 
-                      field="sql2") -> List[Tuple[int,Decimal,int|None,str|None,str|None]]:
+def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:List[Tuple[Hashable,Decimal,int|None,str|None,str|None]], 
+                      field="sql2") -> List[Tuple[Hashable,Decimal,int|None,str|None,str|None]]:
     """Loads the SQL queries and runs them, noting how long they took and how many results they returned."""
 
     done_ids = { r[0] for r in results }
@@ -119,7 +119,6 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 
 
         for id, (sql,) in df[[field]].iterrows():
-            assert isinstance(id,int)
             if id in done_ids:
                 continue
 
