@@ -1,3 +1,4 @@
+from collections import Counter
 from decimal import Decimal
 import logging
 import time
@@ -33,6 +34,31 @@ def generate_sql(df:pandas.DataFrame, db:sqlalchemy.Engine, mapping_file:str):
     return pandas.concat([df[["question","sparql"]],
                          pandas.DataFrame(results, columns=['sql2', 'message', 'status'], index=df.index)],
                          axis=1)
+
+ERROR_PREFIXES = [
+    "Expr not implemented: 'Builtin_EXISTS'"
+]
+
+def display_results_overview(df:pandas.DataFrame):
+    print(Counter(df["status"]))
+
+    prefix_counts = [ len(df[(df["status"] == "Failed to convert") & df["message"].str.startswith(prefix)]) for prefix in ERROR_PREFIXES ]
+    by_count = sorted(zip(ERROR_PREFIXES, prefix_counts), key=lambda p_n: -p_n[1])
+    for p, n in by_count:
+        if n > 0:
+            print(f'{p} -> {n}')
+    print()
+    print(f'Total: {sum([p_n[1] for p_n in by_count])}')
+
+    print()
+    print("Others:")
+    odf = df[df["status"] == "Failed to convert"]
+    for p in ERROR_PREFIXES:
+        odf = odf[~odf["message"].str.startswith(p)]
+    print(odf["message"].head(5))    
+
+def filter_by_message_prefix(df:pandas.DataFrame, prefix:str):
+    return df[df["message"].str.startswith(prefix)]
 
 def nice_dec(t:float) -> Decimal:
     return Decimal(t).quantize(Decimal('0.001'))
