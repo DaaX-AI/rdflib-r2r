@@ -1,11 +1,11 @@
 ### R2RML mapping.
 
-- [v] Mapping for rdf:type.
-- [v] Support for joins (explicit via parentTriplesMap, e.g. shippers_of_order).
-- [v] Support for properties with multiple domains (e.g., Demo:city)
-- [v] Fix unions
-- [v] Support for blank nodes
-- [v] Support for sequence, alt, inv paths 
+### Bugs
+- [ ] dates come out as strings (but maybe that's OK if we convert back to SQL?)
+
+### Features and improvements
+- [ ] Left joins
+- [ ] Exists
 - [ ] Unpack joins into BGPs
 - [ ] Support for better equality of template-based objects (concats)
 
