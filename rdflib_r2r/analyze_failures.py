@@ -1,6 +1,7 @@
 from collections import Counter
 from decimal import Decimal
 import logging
+import re
 import time
 from typing import Hashable, List, Tuple
 import pandas
@@ -122,7 +123,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
             if id in done_ids:
                 continue
 
-            if not sql or not isinstance(sql, str):
+            if not isinstance(sql, str) or not re.sub(r'--.*','', sql).strip(): # Only comments:
                 results.append((id, Decimal("nan"), None, None, None))
                 continue
 
