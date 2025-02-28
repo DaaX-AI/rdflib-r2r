@@ -18,6 +18,64 @@ def norm_ws(s:str|None) -> str|None:
 DEMO_NS = Namespace("http://localhost:8890/Demo/")
 OD_NS = Namespace(DEMO_NS["orders/"])
 
+        
+class TestResolvePathsInTriples(unittest.TestCase):
+    def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
+        actual_triples_lists = list(resolve_paths_in_triples(triples))
+        for i, (ac, exp) in enumerate(zip(actual_triples_lists, resolved_triples)):
+            bnode_map = {}
+            def error():
+                raise Exception(f"Error in triples list {i}:\nActual: {ac}\nExpected: {exp}")
+            for at, bt in zip(ac, exp):
+                for an, bn in zip(at,bt):
+                    if an in bnode_map:
+                        if bnode_map[an] != bn:
+                            error()
+                    elif isinstance(an, BNode):
+                        if isinstance(bn, BNode) and bn not in bnode_map:
+                            bnode_map[an] = bn
+                            bnode_map[bn] = an
+                    else:
+                        if an != bn:
+                            error()
+                            
+
+    def test_simple(self):
+        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person)],[[(DEMO_NS.Me, RDF.type, DEMO_NS.Person)]])
+
+    def test_simple_multiple_triples(self):
+        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))],
+                   [[(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))]])
+
+    def test_sequence(self):
+        b = BNode()
+        self.check([(DEMO_NS.Me, SequencePath(DEMO_NS.dog, DEMO_NS.name), Literal("DogsName"))],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, b),(b, DEMO_NS.name, Literal("DogsName"))]])
+
+    def test_alt(self):
+        self.check([(DEMO_NS.Me, AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.MyPet)],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyPet)], [(DEMO_NS.Me, DEMO_NS.cat, DEMO_NS.MyPet)]])
+
+    def test_inv(self):
+        self.check([(DEMO_NS.MyDog, InvPath(DEMO_NS.dog), DEMO_NS.Me)],
+                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyDog)]])
+        
+    def test_combo(self):
+        b = BNode()
+        self.check([(DEMO_NS.Me, SequencePath(AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.name), Literal("PetsName")),
+                    (DEMO_NS.Me, InvPath(DEMO_NS.master), DEMO_NS.MyDog)],
+                     [[
+                         (DEMO_NS.Me, DEMO_NS.dog, b),
+                         (b, DEMO_NS.name, Literal("PetsName")),
+                         (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
+                         ],
+                      [
+                          (DEMO_NS.Me, DEMO_NS.cat, b),
+                          (b, DEMO_NS.name, Literal("PetsName")),
+                          (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
+                          ]
+                    ])
+
 class TestR2RStore(unittest.TestCase):
 
     db: Engine
@@ -260,15 +318,6 @@ class TestR2RStore(unittest.TestCase):
             WHERE (t0."OrderDate" >= '2023-08-01') AND (t0."OrderDate" <= '2024-07-31') 
             GROUP BY t0."OrderDate", t0."ShipCity") AS anon_1
     ''')
-        
-    @unittest.expectedFailure
-    def test_exists(self):
-        self.check(
-            '''select ?sid { ?s a Demo:Shippers. ?s Demo:shipperid ?sid. filter exists { ?s Demo:shippers_of_orders ?o. ?o a Demo:Orders. } }''',
-            '''SELECT t0."ShipperID" AS sid
-            FROM "Shippers" AS t0 
-            WHERE EXISTS (SELECT * FROM "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia")'''
-        )
 
     def test_join_two_selects(self):
         self.check('''select ?cn ?cc { 
@@ -402,62 +451,14 @@ class TestR2RStore(unittest.TestCase):
                 WHERE anon_1."TotalOrders" > 5
                 ''')
         
-class TestResolvePathsInTriples(unittest.TestCase):
-    def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
-        actual_triples_lists = list(resolve_paths_in_triples(triples))
-        for i, (ac, exp) in enumerate(zip(actual_triples_lists, resolved_triples)):
-            bnode_map = {}
-            def error():
-                raise Exception(f"Error in triples list {i}:\nActual: {ac}\nExpected: {exp}")
-            for at, bt in zip(ac, exp):
-                for an, bn in zip(at,bt):
-                    if an in bnode_map:
-                        if bnode_map[an] != bn:
-                            error()
-                    elif isinstance(an, BNode):
-                        if isinstance(bn, BNode) and bn not in bnode_map:
-                            bnode_map[an] = bn
-                            bnode_map[bn] = an
-                    else:
-                        if an != bn:
-                            error()
-                            
-
-    def test_simple(self):
-        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person)],[[(DEMO_NS.Me, RDF.type, DEMO_NS.Person)]])
-
-    def test_simple_multiple_triples(self):
-        self.check([(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))],
-                   [[(DEMO_NS.Me, RDF.type, DEMO_NS.Person),(DEMO_NS.Me, DEMO_NS.name, Literal("MyName"))]])
-
-    def test_sequence(self):
-        b = BNode()
-        self.check([(DEMO_NS.Me, SequencePath(DEMO_NS.dog, DEMO_NS.name), Literal("DogsName"))],
-                   [[(DEMO_NS.Me, DEMO_NS.dog, b),(b, DEMO_NS.name, Literal("DogsName"))]])
-
-    def test_alt(self):
-        self.check([(DEMO_NS.Me, AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.MyPet)],
-                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyPet)], [(DEMO_NS.Me, DEMO_NS.cat, DEMO_NS.MyPet)]])
-
-    def test_inv(self):
-        self.check([(DEMO_NS.MyDog, InvPath(DEMO_NS.dog), DEMO_NS.Me)],
-                   [[(DEMO_NS.Me, DEMO_NS.dog, DEMO_NS.MyDog)]])
-        
-    def test_combo(self):
-        b = BNode()
-        self.check([(DEMO_NS.Me, SequencePath(AlternativePath(DEMO_NS.dog, DEMO_NS.cat), DEMO_NS.name), Literal("PetsName")),
-                    (DEMO_NS.Me, InvPath(DEMO_NS.master), DEMO_NS.MyDog)],
-                     [[
-                         (DEMO_NS.Me, DEMO_NS.dog, b),
-                         (b, DEMO_NS.name, Literal("PetsName")),
-                         (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
-                         ],
-                      [
-                          (DEMO_NS.Me, DEMO_NS.cat, b),
-                          (b, DEMO_NS.name, Literal("PetsName")),
-                          (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
-                          ]
-                    ])
+    @unittest.expectedFailure
+    def test_exists(self):
+        self.check(
+            '''select ?sid { ?s a Demo:Shippers. ?s Demo:shipperid ?sid. filter exists { ?s Demo:shippers_of_orders ?o. ?o a Demo:Orders. } }''',
+            '''SELECT t0."ShipperID" AS sid
+            FROM "Shippers" AS t0 
+            WHERE EXISTS (SELECT * FROM "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia")'''
+        )
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
