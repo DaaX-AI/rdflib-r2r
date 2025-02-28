@@ -429,6 +429,13 @@ class R2RStore(Store, ABC):
                     return func(*[self.queryExpr(e, var_cf) for e in expr.expr])
 
             if (expr.name == "UnaryNot"):
+                arg = expr.expr
+                if isinstance(arg, CompValue):
+                    if arg.name == "UnaryNot":
+                        return self.queryExpr(arg.expr, var_cf)
+                    elif arg.name == "Builtin_BOUND":
+                        return self.queryExpr(arg.arg, var_cf).is_(None)
+                
                 cf = self.queryExpr(expr.expr, var_cf)
                 return sqlalchemy.not_(cf) 
             

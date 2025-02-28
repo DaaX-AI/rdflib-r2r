@@ -460,6 +460,19 @@ class TestR2RStore(unittest.TestCase):
             WHERE EXISTS (SELECT * FROM "Orders" AS t1 WHERE t0."ShipperID" = t1."ShipVia")'''
         )
 
+    def test_unbound(self):
+        self.check(
+        '''SELECT ?oh_OrderID { FILTER (!BOUND(?oh_Freight)) ?oh a Demo:Orders. ?oh Demo:freight ?oh_Freight. ?oh Demo:orderid ?oh_OrderID. }''',
+        '''SELECT t0."OrderID" AS "oh_OrderID" FROM "Orders" AS t0 WHERE t0."Freight" IS NULL'''
+        )
+
+    def test_bound(self):
+        self.check(
+        '''SELECT ?oh_OrderID { FILTER (BOUND(?oh_Freight)) ?oh a Demo:Orders. ?oh Demo:freight ?oh_Freight. ?oh Demo:orderid ?oh_OrderID. }''',
+        '''SELECT t0."OrderID" AS "oh_OrderID" FROM "Orders" AS t0 WHERE not(t0."Freight" IS NULL)'''
+        )
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     unittest.main()
