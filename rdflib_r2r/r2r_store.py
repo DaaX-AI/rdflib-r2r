@@ -240,7 +240,7 @@ def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
         for e in es:
             yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
 
-def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[str]):
+def collect_external_named_vars(part:CompValue, stop_at:CompValue|None, dest:Set[str]):
     if part is stop_at:
         return
     
@@ -343,6 +343,8 @@ class CurrentProject:
     def __init__(self, project:CompValue):
         self.project = project
         self.named_tables = {}
+        self.named_vars = set[str]();
+        collect_external_named_vars(self.project.p, None, self.named_vars)
 class R2RStore(Store, ABC):
     """
     Args:

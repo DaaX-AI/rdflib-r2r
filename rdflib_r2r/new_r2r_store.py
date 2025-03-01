@@ -63,7 +63,8 @@ class ProcessingState:
                 alias0 = make_short_alias(tab.name)
                 alias = alias0
                 i = 0
-                while alias in self.rows:
+                current_aliases = { row.table.name for row in self.rows.values() }
+                while alias in current_aliases or alias in self.store.current_project.named_vars:
                     alias = alias0 + str(i)
                     i += 1
                 atab = tab.alias(alias)
@@ -76,8 +77,6 @@ class ProcessingState:
             return self
 
 def get_col(tab:NamedFromClause, col_name:str) -> ColumnElement:
-    if col_name not in tab.c:
-        print("whut")
     return tab.c[col_name]
 
 def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
