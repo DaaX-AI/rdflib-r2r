@@ -15,7 +15,7 @@ The mapped SQL database as an RDF graph store object
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Generator, Mapping, Optional, List, Dict, cast, TypeVar, Sequence
+from typing import Any, Generator, Mapping, Optional, List, Dict, Set, cast, TypeVar, Sequence
 import logging
 import base64
 import re
@@ -215,26 +215,27 @@ def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[Vari
     if part is stop_at:
         return
     
-    elif part.name == "BGP":
-        for t in part.triples:
-            for v in t:
-                if isinstance(v, Variable):
-                    dest.add(v)
+    if isinstance(part, CompValue):
+        if part.name == "BGP":
+            for t in part.triples:
+                for v in t:
+                    if isinstance(v, Variable):
+                        dest.add(v)
 
-    elif part.name == "Project":
-        for v in part.PV:
-            dest.add(v)
+        elif part.name == "Project":
+            for v in part.PV:
+                dest.add(v)
 
-    elif part.name == "Extend":
-        dest.add(part.var)
-        collect_external_named_vars(part.p, stop_at, dest)
+        elif part.name == "Extend":
+            dest.add(part.var)
+            collect_external_named_vars(part.p, stop_at, dest)
 
-    elif hasattr(part, "p"):
-        collect_external_named_vars(part.p, stop_at, dest)
+        elif hasattr(part, "p"):
+            collect_external_named_vars(part.p, stop_at, dest)
 
-    if hasattr(part, "p1"):
-        collect_external_named_vars(part.p1, stop_at, dest)
-        collect_external_named_vars(part.p2, stop_at, dest)
+        if hasattr(part, "p1"):
+            collect_external_named_vars(part.p1, stop_at, dest)
+            collect_external_named_vars(part.p2, stop_at, dest)
 
 
 def op(opstr:str, cf1:ColumnElement, cf2:ColumnElement) -> ColumnElement:
