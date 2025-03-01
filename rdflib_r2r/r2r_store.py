@@ -497,7 +497,11 @@ class R2RStore(Store, ABC):
                 collect_external_named_vars(self.current_project, expr, external_vars)
                 #XXX TODO
                 return as_select(query).exists()
-
+            
+            if expr.name == "Builtin_NOTEXISTS":
+                ex = self.queryExpr(CompValue("Builtin_EXISTS", graph=expr.graph), var_cf)
+                return sqlalchemy.not_(ex)
+            
         if isinstance(expr, Variable):
             result = var_cf.get(str(expr),None)
             if result is None:
@@ -517,21 +521,6 @@ class R2RStore(Store, ABC):
         part_query = self.queryPart(part.p)
         part_query = as_select(part_query)
         named_cols = get_named_columns(part_query)
-
-        if getattr(part.expr, "name", None) == "Builtin_NOTEXISTS":
-            # This is weird, but I guess that's how it is
-            query2 = self.queryPart(part.expr.graph)
-
-            var_colforms = {}
-            cols1 = list(part_query.exported_columns)
-            for v, sf1 in var_subform.items():
-                var_colforms.setdefault(v, []).append(ExpressionTemplate.from_subform(cols1, *sf1))
-            cols2 = list(query2.exported_columns)
-            for v, sf2 in var_subform2.items():
-                var_colforms.setdefault(v, []).append(ExpressionTemplate.from_subform(cols2, *sf2))
-
-            where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
-            return part_query.filter(~as_select(query2).where(*where).exists())
 
         clause = self.queryExpr(part.expr, named_cols)
 
