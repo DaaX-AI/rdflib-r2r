@@ -155,6 +155,29 @@ def project_query(query:SQLQuery, names:Sequence[str]):
 
     return query.with_only_columns(*cols)
 
+def get_column_table(column: ColumnElement):
+    """
+    Given a SQLAlchemy ColumnElement, return the associated Table if it is a column access.
+    
+    This function handles:
+    - Direct table columns (`table.c.column_name`)
+    - Aliased table columns (`aliased(table).c.column_name`)
+    - ORM-mapped columns
+    - Columns wrapped in expressions
+    
+    Returns:
+        Table: The SQLAlchemy Table object if found, otherwise None.
+    """
+    # Direct table column
+    if hasattr(column, "table") and column.table is not None:
+        return column.table
+
+    # Aliased columns
+    if hasattr(column, "original") and column.original is not None:
+        return get_column_table(column.original)
+
+    return None
+
 def is_simple_select(stmt:SQLQuery) -> bool:
     if not isinstance(stmt, Select):
         stmt = as_select(stmt)
@@ -211,7 +234,7 @@ def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
         for e in es:
             yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
 
-def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[Variable]):
+def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[str]):
     if part is stop_at:
         return
     
@@ -220,14 +243,14 @@ def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[Vari
             for t in part.triples:
                 for v in t:
                     if isinstance(v, Variable):
-                        dest.add(v)
+                        dest.add(str(v))
 
         elif part.name == "Project":
             for v in part.PV:
-                dest.add(v)
+                dest.add(str(v))
 
         elif part.name == "Extend":
-            dest.add(part.var)
+            dest.add(str(part.var))
             collect_external_named_vars(part.p, stop_at, dest)
 
         elif hasattr(part, "p"):
@@ -493,11 +516,14 @@ class R2RStore(Store, ABC):
             
             if expr.name == "Builtin_EXISTS":
                 query = self.queryPart(expr.graph)
-                external_vars = set()
+                external_vars = set[str]()
                 assert self.current_project
-                collect_external_named_vars(self.current_project, expr, external_vars)
-                #XXX TODO
-                return as_select(query).exists()
+                collect_external_named_vars(self.current_project.p, expr, external_vars)
+                named_columns = get_named_columns(query)
+                corr_cols = [ c for n,c in named_columns.items() if n in external_vars ]
+                corr_froms = [ get_column_table(c) for c in corr_cols ]
+                sq = as_select(query).with_only_columns('*', maintain_column_froms=True).correlate(*corr_froms)
+                return sq.exists()
             
             if expr.name == "Builtin_NOTEXISTS":
                 ex = self.queryExpr(CompValue("Builtin_EXISTS", graph=expr.graph), var_cf)
