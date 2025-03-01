@@ -11,7 +11,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.sql import ColumnElement, select, literal_column, literal, func as sqlfunc
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
 from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, iter_opt, results_union, sql_and
+from rdflib_r2r.r2r_store import R2RStore, expr_to_str, iter_opt, results_union, sql_and
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -51,16 +51,24 @@ class ProcessingState:
         tab = self.store.metadata.tables[tab.name]
         if not row:
             if isinstance(s, Variable):
-                alias0 = str(s)
+                alias = str(s)
+
+                key = (alias, tab.name)
+                if key in self.store.current_project.named_tables:
+                    atab = self.store.current_project.named_tables[key]
+                else:
+                    atab = tab.alias(alias)
+                    self.store.current_project.named_tables[key] = atab
             else:
                 alias0 = make_short_alias(tab.name)
-            alias = alias0
-            i = 0
-            while alias in self.rows:
-                alias = alias0 + str(i)
-                i += 1
+                alias = alias0
+                i = 0
+                while alias in self.rows:
+                    alias = alias0 + str(i)
+                    i += 1
+                atab = tab.alias(alias)
 
-            row = Row(subject=s, table=tab.alias(alias))
+            row = Row(subject=s, table=atab)
             return replace(self, rows={**self.rows, s: row})
         elif cast(Alias, row.table).original != tab:
             return None
@@ -68,6 +76,8 @@ class ProcessingState:
             return self
 
 def get_col(tab:NamedFromClause, col_name:str) -> ColumnElement:
+    if col_name not in tab.c:
+        print("whut")
     return tab.c[col_name]
 
 def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
@@ -105,9 +115,6 @@ def get_python_column_type(tab:FromClause, col_name:str) -> Optional[Type[Any]]:
     #    tab = tab.element
     col = get_col(cast(NamedFromClause, tab), col_name)
     return col.type.python_type
-
-def expr_to_str(ex:ColumnElement):
-    return str(ex.compile(compile_kwargs={"literal_binds": True}))
 
 def same_expressions(ex1:ColumnElement, ex2:ColumnElement):
     return expr_to_str(ex1) == expr_to_str(ex2)

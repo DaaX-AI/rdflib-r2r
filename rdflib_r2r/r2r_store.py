@@ -15,7 +15,7 @@ The mapped SQL database as an RDF graph store object
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Generator, Mapping, Optional, List, Dict, Set, cast, TypeVar, Sequence
+from typing import Any, Generator, Mapping, Optional, List, Dict, Set, Tuple, cast, TypeVar, Sequence
 import logging
 import base64
 import re
@@ -27,12 +27,13 @@ from rdflib.util import from_n3
 from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
+from sqlalchemy.sql import ColumnElement
 import sqlalchemy.sql.operators
 from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect, Subquery
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import Select, distinct, case, Function, ClauseElement
-from sqlalchemy.sql.selectable import _CompoundSelectKeyword
+from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
 
@@ -168,13 +169,18 @@ def get_column_table(column: ColumnElement):
     Returns:
         Table: The SQLAlchemy Table object if found, otherwise None.
     """
+    # Template expansion
+    if column._annotations and "expansion_of" in column._annotations:
+        exp = column._annotations["expansion_of"]
+        return exp["table"]
+    
+    # Label?
+    if isinstance(column, Label):
+        return get_column_table(column.element)
+
     # Direct table column
     if hasattr(column, "table") and column.table is not None:
         return column.table
-
-    # Aliased columns
-    if hasattr(column, "original") and column.original is not None:
-        return get_column_table(column.original)
 
     return None
 
@@ -329,13 +335,21 @@ def convert_pattern_to_like(regex:str) -> str:
 
     return like.getvalue()
 
+
+class CurrentProject:
+    project: CompValue
+    named_tables: Dict[Tuple[str,str],NamedFromClause]
+
+    def __init__(self, project:CompValue):
+        self.project = project
+        self.named_tables = {}
 class R2RStore(Store, ABC):
     """
     Args:
         db: SQLAlchemy engine.
     """
 
-    current_project:CompValue|None = None
+    _current_project:CurrentProject|None = None
 
     def __init__(
         self,
@@ -351,6 +365,7 @@ class R2RStore(Store, ABC):
         self.db = db
         self.mapping_graph = mapping_graph
         self.base = base
+        self._current_project = None
         assert self.db
 
     def __len__(self, context=None) -> int:
@@ -376,6 +391,11 @@ class R2RStore(Store, ABC):
     def nb_shared(self) -> int:
         """The number of shared subject-object in the DB mapping."""
         raise NotImplementedError
+    
+    @property
+    def current_project(self) -> CurrentProject:
+        assert self._current_project
+        return self._current_project
 
     def _iri_encode(self, iri_n3) -> URIRef:
         iri = iri_n3[1:-1]
@@ -515,15 +535,7 @@ class R2RStore(Store, ABC):
                 return case(*cases, else_=self.queryExpr(if_expr, var_cf))
             
             if expr.name == "Builtin_EXISTS":
-                query = self.queryPart(expr.graph)
-                external_vars = set[str]()
-                assert self.current_project
-                collect_external_named_vars(self.current_project.p, expr, external_vars)
-                named_columns = get_named_columns(query)
-                corr_cols = [ c for n,c in named_columns.items() if n in external_vars ]
-                corr_froms = [ get_column_table(c) for c in corr_cols ]
-                sq = as_select(query).with_only_columns('*', maintain_column_froms=True).correlate(*corr_froms)
-                return sq.exists()
+                return self.convertExists(expr)
             
             if expr.name == "Builtin_NOTEXISTS":
                 ex = self.queryExpr(CompValue("Builtin_EXISTS", graph=expr.graph), var_cf)
@@ -543,6 +555,20 @@ class R2RStore(Store, ABC):
 
         e = f'Expr not implemented: {getattr(expr, "name", None).__repr__()} {expr}'
         raise SparqlNotImplementedError(e)
+    
+    def convertExists(self, expr:CompValue):
+        preexisting_keys = set(self.current_project.named_tables.keys())
+        query = self.queryPart(expr.graph)
+        self.current_project.named_tables = { k:v for k,v in self.current_project.named_tables.items() if k in preexisting_keys }
+        external_vars = set[str]()
+        assert self.current_project
+        collect_external_named_vars(self.current_project.project.p, expr, external_vars)
+        named_columns = get_named_columns(query)
+        corr_cols = [ c for n,c in named_columns.items() if n in external_vars ]
+        corr_froms = [ get_column_table(c) for c in corr_cols ]
+        corr_froms = [ f for f in corr_froms if f is not None ]
+        sq = as_select(query).with_only_columns('*', maintain_column_froms=True)
+        return sq.exists().correlate(*corr_froms)
 
     def queryFilter(self, part:CompValue) -> SQLQuery:
         part_query = self.queryPart(part.p)
@@ -630,14 +656,14 @@ class R2RStore(Store, ABC):
         return part_query.with_only_columns(*part_query.exported_columns, cf.label(str(part.var)))
 
     def queryProject(self, part:CompValue) -> SQLQuery:
-        old_project = self.current_project
-        self.current_project = part
+        old_project = self._current_project
+        self._current_project = CurrentProject(part)
         try:
             part_query = self.queryPart(part.p)
             expected_names = [str(v) for v in part.PV]
             return project_query(part_query, expected_names)
         finally:
-            self.current_project = old_project
+            self._current_project = old_project
     
     def queryOrderBy(self, part) -> SQLQuery:
         part_query = self.queryPart(part.p)
@@ -778,5 +804,9 @@ class R2RStore(Store, ABC):
 
     def remove(self, triple, context=None):
         raise TypeError("The DB mapping is read only!")
+
+
+def expr_to_str(ex:ColumnElement):
+    return str(ex.compile(compile_kwargs={"literal_binds": True}))
 
     ############################################## OLD STUFF #################################################

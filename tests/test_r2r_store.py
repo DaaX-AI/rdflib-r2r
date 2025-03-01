@@ -476,7 +476,6 @@ class TestR2RStore(unittest.TestCase):
         '''SELECT oh."OrderID" AS "oh_OrderID" FROM "Orders" AS oh WHERE not(oh."Freight" IS NULL)'''
         )
 
-    @unittest.expectedFailure
     def test_exists(self):
         self.check(
             '''select ?sid { ?s a Demo:Shippers. ?s Demo:shipperid ?sid. filter exists { ?s Demo:shippers_of_orders ?o. ?o a Demo:Orders. } }''',
