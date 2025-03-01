@@ -211,6 +211,31 @@ def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
         for e in es:
             yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
 
+def collect_external_named_vars(part:CompValue, stop_at:CompValue, dest:Set[Variable]):
+    if part is stop_at:
+        return
+    
+    elif part.name == "BGP":
+        for t in part.triples:
+            for v in t:
+                if isinstance(v, Variable):
+                    dest.add(v)
+
+    elif part.name == "Project":
+        for v in part.PV:
+            dest.add(v)
+
+    elif part.name == "Extend":
+        dest.add(part.var)
+        collect_external_named_vars(part.p, stop_at, dest)
+
+    elif hasattr(part, "p"):
+        collect_external_named_vars(part.p, stop_at, dest)
+
+    if hasattr(part, "p1"):
+        collect_external_named_vars(part.p1, stop_at, dest)
+        collect_external_named_vars(part.p2, stop_at, dest)
+
 
 def op(opstr:str, cf1:ColumnElement, cf2:ColumnElement) -> ColumnElement:
     if opstr in ["=", "=="]:
@@ -285,6 +310,8 @@ class R2RStore(Store, ABC):
     Args:
         db: SQLAlchemy engine.
     """
+
+    current_project:CompValue|None = None
 
     def __init__(
         self,
@@ -462,6 +489,14 @@ class R2RStore(Store, ABC):
                     cases.append((self.queryExpr(if_expr.arg1, var_cf), self.queryExpr(if_expr.arg2, var_cf)))
                     if_expr = if_expr.arg3
                 return case(*cases, else_=self.queryExpr(if_expr, var_cf))
+            
+            if expr.name == "Builtin_EXISTS":
+                query = self.queryPart(expr.graph)
+                external_vars = set()
+                assert self.current_project
+                collect_external_named_vars(self.current_project, expr, external_vars)
+                #XXX TODO
+                return as_select(query).exists()
 
         if isinstance(expr, Variable):
             result = var_cf.get(str(expr),None)
@@ -579,9 +614,14 @@ class R2RStore(Store, ABC):
         return part_query.with_only_columns(*part_query.exported_columns, cf.label(str(part.var)))
 
     def queryProject(self, part:CompValue) -> SQLQuery:
-        part_query = self.queryPart(part.p)
-        expected_names = [str(v) for v in part.PV]
-        return project_query(part_query, expected_names)
+        old_project = self.current_project
+        self.current_project = part
+        try:
+            part_query = self.queryPart(part.p)
+            expected_names = [str(v) for v in part.PV]
+            return project_query(part_query, expected_names)
+        finally:
+            self.current_project = old_project
     
     def queryOrderBy(self, part) -> SQLQuery:
         part_query = self.queryPart(part.p)
@@ -609,38 +649,33 @@ class R2RStore(Store, ABC):
 
     def queryLeftJoin(self, part) -> SQLQuery:
 
-        query1, var_subform1 = self.queryPart(part.p1)
-        query2, var_subform2 = self.queryPart(part.p2)
-        if not query1.c:
-            return SelectVarSubForm(query2, var_subform2)
-        if not query2.c:
-            return SelectVarSubForm(query1, var_subform1)
+        #XXX Horribly broken!
+        query1 = self.queryPart(part.p1)
+        query2 = self.queryPart(part.p2)
 
-        var_colforms:dict[Variable,List[ExpressionTemplate]] = {}
-        allcols1, allcols2 = [], []
-        cols1 = list(query1.c)
-        for v, sf1 in var_subform1.items():
-            cf = ExpressionTemplate.from_subform(cols1, *sf1)
-            var_colforms.setdefault(v, []).append(cf)
-            allcols1.append(cf.expr().label(str(v)))
-        
-        query2 = query2.subquery()
-        cols2 = list(query2.c)
-        for v, sf2 in var_subform2.items():
-            cf = ExpressionTemplate.from_subform(cols2, *sf2)
-            var_colforms.setdefault(v, []).append(cf)
-            allcols2.append(cf.expr().label(str(v)))
+        j1 = query1.alias('j1')
+        j2 = query2.alias('j2')
 
-        where = [eq for cs in var_colforms.values() for eq in ExpressionTemplate.equal(*cs)]
+        allcols = []
+        names1 = set()
+        for c in j1.exported_columns:
+            if isinstance(c, NamedColumn):
+                names1.add(c.name)
+                c = c.label(c.name)
+            allcols.append(c)
 
-        outer = select(*query1.c, *query2.c).outerjoin(
-            query2, 
-            onclause=sql_and(*where)
-        )
-        varcols = [literal_column(str(v)) for v in var_colforms]
-        query = select(*varcols).select_from(outer.subquery())
+        common_names = set()
+        for c in j2.exported_columns:
+            if isinstance(c, NamedColumn):
+                if c.name in names1:
+                    common_names.add(c.name)
+                    continue
+                c = c.label(c.name)
+            allcols.append(c)
 
-        return SelectVarSubForm(query, {v: SubForm([i], (None,)) for i,v in enumerate(var_colforms)})
+
+        ons = [ j1.exported_columns[n] == j2.exported_columns[n] for n in common_names ]
+        return  as_select(query1).outerjoin(as_select(query2).subquery(), onclause=sql_and(*ons))
 
     def queryPart(self, part:CompValue) -> SQLQuery:
         if part.name == "BGP":
