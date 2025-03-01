@@ -82,7 +82,7 @@ def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
             if get_python_column_type(tab, colname) != str:
                 col = sqlfunc.cast(col, sqltypes.VARCHAR)
 
-    return sqlfunc.concat(*parts)
+    return sqlfunc.concat(*parts)._annotate({'expansion_of': {'template': template, 'table': tab}})
 
 def parse_with_template(s:str, template:str) -> Optional[Dict[str, str]]:
     format_tuples = Formatter().parse(template)
