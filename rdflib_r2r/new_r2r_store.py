@@ -25,6 +25,18 @@ class VariableExpression:
     expression: ColumnElement
     template: str|None
 
+def make_short_alias(name:str):
+    alias = ''
+    prev = None
+    for c in name:
+        if c.isalpha():
+            if prev is None or c.isupper() and not prev.isupper():
+                alias += c.lower()
+            prev = c
+        else:
+            prev = None
+    return alias
+
 @dataclass(frozen=True, eq=True, kw_only=True)
 class ProcessingState:
     store:"NewR2rStore"
@@ -38,7 +50,17 @@ class ProcessingState:
         tab = _get_table(self.store.mapping_graph, triple_map)
         tab = self.store.metadata.tables[tab.name]
         if not row:
-            row = Row(subject=s, table=tab.alias("t"+str(len(self.rows))))
+            if isinstance(s, Variable):
+                alias0 = str(s)
+            else:
+                alias0 = make_short_alias(tab.name)
+            alias = alias0
+            i = 0
+            while alias in self.rows:
+                alias = alias0 + str(i)
+                i += 1
+
+            row = Row(subject=s, table=tab.alias(alias))
             return replace(self, rows={**self.rows, s: row})
         elif cast(Alias, row.table).original != tab:
             return None
