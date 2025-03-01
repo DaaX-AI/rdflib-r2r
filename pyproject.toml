@@ -21,6 +21,7 @@ tabulate = "^0.8.9"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
+keyring = "^25.6.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
