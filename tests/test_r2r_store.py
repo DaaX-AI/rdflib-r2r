@@ -341,8 +341,10 @@ class TestR2RStore(unittest.TestCase):
                   }
                 }''', 
                 '''
-                SELECT c."CompanyName" AS cn, anon_1.cc AS cc 
-                FROM "Customers" AS c, 
+                SELECT anon_1.cn AS cn, anon_2.cc AS cc 
+                FROM 
+                    (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, c."CompanyName" AS cn, c."CustomerID" AS "c_K0" 
+                    FROM "Customers" AS c) AS anon_1, 
                     (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, c."City" AS cc 
                     FROM "Customers" AS c 
                     UNION ALL 
@@ -350,9 +352,10 @@ class TestR2RStore(unittest.TestCase):
                     FROM "Employees" AS c 
                     UNION ALL 
                     SELECT concat('http://localhost:8890/Demo/suppliers/', c."SupplierID") AS c, c."City" AS cc 
-                    FROM "Suppliers" AS c) AS anon_1 
-                    WHERE concat('http://localhost:8890/Demo/customers/', c."CustomerID") = anon_1.c
-                ''')
+                    FROM "Suppliers" AS c) 
+                    AS anon_2 WHERE anon_1.c = anon_2.c
+                '''
+                )
         
     def test_join_select_with_aggregation(self):
         self.check('''
@@ -394,11 +397,14 @@ class TestR2RStore(unittest.TestCase):
                 }''', 
                 #XXX We should be able to get rid URI packing/unpacking...
                 '''
-                SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
-                FROM "Shippers" AS s, 
-                    (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr, s."ShipperID" AS "s_K0" 
-                    FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1 
-                    WHERE s."ShipperID" = anon_1."s_K0"
+                SELECT anon_1.cn AS cn, anon_1.total_fr AS total_fr 
+                FROM 
+                    (SELECT s."CompanyName" AS cn, anon_2.total_fr AS total_fr 
+                    FROM "Shippers" AS s, 
+                        (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr, s."ShipperID" AS "s_K0" 
+                        FROM "Shippers" AS s, "Orders" AS o 
+                        WHERE s."ShipperID" = o."ShipVia") AS anon_2 
+                    WHERE s."ShipperID" = anon_2."s_K0") AS anon_1
                 '''
             )
         

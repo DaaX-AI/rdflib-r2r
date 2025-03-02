@@ -732,10 +732,11 @@ class R2RStore(Store, ABC):
         
     def queryToMultiset(self, part) -> SQLQuery:   
         part_query = self.queryPart(part.p)
-        if is_simple_select(part_query):
-            return part_query
-        else:
-            return wrap_in_select(part_query)
+        #This doesn't always work; e.g. leads to multiple copies of the same table in from list...
+        # if is_simple_select(part_query):
+        #     return part_query
+        # else:
+        return wrap_in_select(part_query)
 
     def queryJoin(self, part) -> SQLQuery:
         def is_empty(p):
