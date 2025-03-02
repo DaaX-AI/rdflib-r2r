@@ -204,27 +204,19 @@ class TestR2RStore(unittest.TestCase):
         
     def test_sparql_join(self):
         self.check('''select ?cn ?cc { { ?c a Demo:Customers; Demo:companyname ?cn . } { ?c Demo:city ?cc } }''', 
-                    '''SELECT j1.cn AS cn, j2.cc AS cc FROM 
-                        (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, 
-                            c."CompanyName" AS cn FROM "Customers" AS c) 
-                        AS j1, 
-                        (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, 
-                                c."City" AS cc FROM "Customers" AS c 
-                            UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', c."EmployeeID") AS c, 
-                                c."City" AS cc FROM "Employees" AS c 
-                            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', c."SupplierID") AS c, 
-                                c."City" AS cc FROM "Suppliers" AS c) 
-                        AS j2 
-                        WHERE j1.c = j2.c'''
-                    #'''SELECT j1.cn AS cn, j2.cc AS cc FROM 
-                    #   (SELECT c."CustomerID" AS c_CustomerID, c."CompanyName" AS cn FROM "Customers" AS c) 
-                    #   AS j1,
-                    #   (SELECT c."CustomerID" AS c_CustomerID, c."City" AS cc FROM "Customers" AS c) 
-                    #   AS j2,
-                    #   WHERE j1.c = j2.c'''
-                )
+                   '''
+                    SELECT c."CompanyName" AS cn, anon_1.cc AS cc FROM "Customers" AS c, 
+                    (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, c."City" AS cc 
+                    FROM "Customers" AS c 
+                    UNION ALL 
+                    SELECT concat('http://localhost:8890/Demo/employees/', c."EmployeeID") AS c, c."City" AS cc 
+                    FROM "Employees" AS c 
+                    UNION ALL 
+                    SELECT concat('http://localhost:8890/Demo/suppliers/', c."SupplierID") AS c, c."City" AS cc 
+                    FROM "Suppliers" AS c) AS anon_1 
+                    WHERE concat('http://localhost:8890/Demo/customers/', c."CustomerID") = anon_1.c
+                    ''')
         
-    @unittest.expectedFailure
     def test_sparql_join_two_tables(self):
         self.check('''select (COUNT(*) AS ?count) {
                    {
@@ -234,7 +226,11 @@ class TestR2RStore(unittest.TestCase):
                     ?ol a Demo:Order_Details; Demo:order_details_has_orders / Demo:orderid ?oid.
                    }
                 }''',
-                '''SELECT o."OrderID" AS oid FROM "Orders" AS o, "Order Details" as ol where o."OrderID" = ol."OrderID"''')
+                #XXX Should be able to get rid of: 1) URI packing/unpacking, 2) o0 because its primary key matches o.
+                '''SELECT count(*) AS COUNT 
+                FROM "Orders" AS o, "Order Details" AS ol, "Orders" AS o0 
+                WHERE o."OrderID" = o0."OrderID" AND concat('http://localhost:8890/Demo/orders/', ol."OrderID") = concat('http://localhost:8890/Demo/orders/', o0."OrderID")
+                ''')
 
     def test_orderby_limit(self):
         self.check('''select ?order_date {
@@ -344,19 +340,19 @@ class TestR2RStore(unittest.TestCase):
                    } 
                   }
                 }''', 
-                    '''SELECT j1.cn AS cn, j2.cc AS cc FROM 
-                        (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, 
-                            c."CompanyName" AS cn FROM "Customers" AS c) 
-                        AS j1, 
-                        (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, 
-                                c."City" AS cc FROM "Customers" AS c 
-                            UNION ALL SELECT concat('http://localhost:8890/Demo/employees/', c."EmployeeID") AS c, 
-                                c."City" AS cc FROM "Employees" AS c 
-                            UNION ALL SELECT concat('http://localhost:8890/Demo/suppliers/', c."SupplierID") AS c, 
-                                c."City" AS cc FROM "Suppliers" AS c) 
-                        AS j2 
-                        WHERE j1.c = j2.c'''
-                )
+                '''
+                SELECT c."CompanyName" AS cn, anon_1.cc AS cc 
+                FROM "Customers" AS c, 
+                    (SELECT concat('http://localhost:8890/Demo/customers/', c."CustomerID") AS c, c."City" AS cc 
+                    FROM "Customers" AS c 
+                    UNION ALL 
+                    SELECT concat('http://localhost:8890/Demo/employees/', c."EmployeeID") AS c, c."City" AS cc 
+                    FROM "Employees" AS c 
+                    UNION ALL 
+                    SELECT concat('http://localhost:8890/Demo/suppliers/', c."SupplierID") AS c, c."City" AS cc 
+                    FROM "Suppliers" AS c) AS anon_1 
+                    WHERE concat('http://localhost:8890/Demo/customers/', c."CustomerID") = anon_1.c
+                ''')
         
     def test_join_select_with_aggregation(self):
         self.check('''
@@ -371,15 +367,13 @@ class TestR2RStore(unittest.TestCase):
                 }''', 
                 #XXX We should be able to get rid of the anon1 select layer...
                 '''
-                SELECT j1.cn AS cn, j2.total_fr AS total_fr 
-                FROM 
-                (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, s."CompanyName" AS cn 
-                    FROM "Shippers" AS s) AS j1, 
-                (SELECT anon_1.s AS s, anon_1.total_fr AS total_fr FROM
+                SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
+                FROM "Shippers" AS s, 
                     (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr 
-                    FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1) AS j2 
-                    WHERE j1.s = j2.s
-                ''')
+                    FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1 
+                    WHERE concat('http://localhost:8890/Demo/shippers/', s."ShipperID") = anon_1.s
+                '''
+                )
         
     def test_join_select_with_aggregation_in_subquery(self):
         self.check('''
@@ -399,17 +393,15 @@ class TestR2RStore(unittest.TestCase):
                         }
                     }
                 }''', 
-                #XXX We should be able to get rid of the anon1 select layer...
+                #XXX We should be able to get rid URI packing/unpacking...
                 '''
-                SELECT j1.cn AS cn, j2.total_fr AS total_fr 
-                FROM 
-                (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, s."CompanyName" AS cn 
-                    FROM "Shippers" AS s) AS j1, 
-                (SELECT anon_1.s AS s, anon_1.total_fr AS total_fr FROM
+                SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
+                FROM "Shippers" AS s, 
                     (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr 
-                        FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1) AS j2 
-                    WHERE j1.s = j2.s
-                ''')
+                    FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1 
+                    WHERE concat('http://localhost:8890/Demo/shippers/', s."ShipperID") = anon_1.s
+                '''
+            )
         
     def test_if(self):
         self.check('''SELECT (IF(4 > 3, "Yes", IF(3 < 4, "Whut", "No")) AS ?r) { }''',
@@ -491,11 +483,11 @@ class TestR2RStore(unittest.TestCase):
                    FROM "Shippers" AS s LEFT OUTER JOIN "Orders" AS o ON s."ShipperID" = o."ShipVia"'''
         )
 
-    @unittest.expectedFailure
+    #@unittest.expectedFailure
     def test_left_join(self):
         self.check('''SELECT ?shid ?fr { ?s a Demo:Shippers. OPTIONAL { ?o a Demo:Orders. ?s Demo:shippers_of_orders ?o. ?o Demo:freight ?fr. } ?s Demo:shipperid ?shid. }''',
                    '''SELECT s."ShipperID" AS shid, o."Freight" AS fr 
-                   FROM "Shippers" AS s LEFT JOIN "Orders" AS o on s."ShipperID" = o."ShipVia"''')        
+                   FROM "Shippers" AS s LEFT OUTER JOIN "Orders" AS o ON s."ShipperID" = o."ShipVia"''')        
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

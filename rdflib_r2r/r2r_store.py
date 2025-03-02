@@ -342,6 +342,50 @@ def convert_pattern_to_like(regex:str) -> str:
     return like.getvalue()
 
 
+def already_includes(parent:FromClause, child:FromClause):
+    if child is parent:
+        return True
+    if isinstance(parent,Join):
+        if not parent.full:
+            if already_includes(parent.left, child):
+                return True
+        if not parent.isouter:
+            if already_includes(parent.right, child):
+                return True
+    return False
+
+def combine_from_clauses(q:Select, exclude_from: FromClause|None = None):
+
+    combined_from = None
+    for f in q.get_final_froms():
+        if exclude_from is not None and already_includes(exclude_from, f):
+            continue
+        if combined_from is None:
+            combined_from = f
+        else:
+            combined_from = combined_from.join(f, onclause=literal(True))
+    return combined_from
+
+def merge_exported_columns(query1, query2):
+    allcols = []
+    merge_conds = []
+    names2cols1:dict[str,ClauseElement] = {}
+    for c in query1.exported_columns:
+        if isinstance(c, NamedColumn):
+            c = c.label(c.name)
+            names2cols1[c.name] = c
+        allcols.append(c)
+
+    for c in query2.exported_columns:
+        if isinstance(c, NamedColumn):
+            c1 = names2cols1.get(c.name,None)
+            if c1 is not None:
+                if not c.compare(c1):
+                    merge_conds += list(equal(c1, c))
+                continue
+        allcols.append(c)
+    return allcols, merge_conds
+
 class CurrentProject:
     project: CompValue
     named_tables: Dict[Tuple[str,str],NamedFromClause]
@@ -616,31 +660,21 @@ class R2RStore(Store, ABC):
         if is_empty(part.p2):
             return self.queryPart(part.p1)
         
-        query1 = self.queryPart(part.p1)
-        query2 = self.queryPart(part.p2)
+        query1 = as_simple_select(self.queryPart(part.p1))
+        query2 = as_simple_select(self.queryPart(part.p2))
 
-        j1 = query1.alias('j1')
-        j2 = query2.alias('j2')
+        allcols, merge_conds = merge_exported_columns(query1, query2)
 
-        allcols = []
-        names1 = set()
-        for c in j1.exported_columns:
-            if isinstance(c, NamedColumn):
-                names1.add(c.name)
-                c = c.label(c.name)
-            allcols.append(c)
+        froms1 = query1.get_final_froms()
+        froms = list(froms1)
+        for f in query2.get_final_froms():
+            if not any(already_includes(f1,f) for f1 in froms1):
+                froms.append(f)
 
-        common_names = set()
-        for c in j2.exported_columns:
-            if isinstance(c, NamedColumn):
-                if c.name in names1:
-                    common_names.add(c.name)
-                    continue
-                c = c.label(c.name)
-            allcols.append(c)
-
-        wheres = [ j1.exported_columns[n] == j2.exported_columns[n] for n in common_names ]
-        return select(*allcols).where(*wheres)
+        w2 = query2.whereclause
+        if w2 is not None:
+            merge_conds.append(w2)
+        return query1.with_only_columns(*allcols).select_from(*froms).where(*merge_conds)
 
     def queryAggregateJoin(self, agg) -> SQLQuery:
         # Assume agg.p is always a Group
@@ -702,59 +736,21 @@ class R2RStore(Store, ABC):
         query1 = as_simple_select(self.queryPart(part.p1))
         query2 = as_simple_select(self.queryPart(part.p2))
 
-        allcols = []
-        names2cols1:Mapping[str,ColumnElement] = {}
-        for c in query1.exported_columns:
-            if isinstance(c, NamedColumn):
-                c = c.label(c.name)
-                names2cols1[c.name] = c
-            allcols.append(c)
+        allcols, merge_conds = merge_exported_columns(query1, query2)
 
-        ons:List[ColumnElement[bool]] = []
-        for c in query2.exported_columns:
-            if isinstance(c, NamedColumn):
-                c = c.label(c.name)
-                c1 = names2cols1.get(c.name, None)
-                if c1 is not None:
-                    ons += list(equal(c1,c))
-                    continue
-            allcols.append(c)
-
-        def get_from(q:Select, exclude_from: FromClause|None = None):
-
-            def contains(parent:FromClause, child:FromClause):
-                if child is parent:
-                    return True
-                if isinstance(parent,Join):
-                    if not parent.full:
-                        if contains(parent.left, child):
-                            return True
-                    if not parent.isouter:
-                        if contains(parent.right, child):
-                            return True
-                return False
-
-            combined_from = None
-            for f in q.get_final_froms():
-                if exclude_from is not None and contains(exclude_from, f):
-                    continue
-                if combined_from is None:
-                    combined_from = f
-                else:
-                    combined_from = combined_from.join(f, onclause=literal(True))
-            return combined_from
-
-        from1 = get_from(query1)
-        from2 = get_from(query2, exclude_from=from1)
+        from1 = combine_from_clauses(query1)
+        from2 = combine_from_clauses(query2, exclude_from=from1)
 
         assert from1 is not None
         assert from2 is not None
 
-        onclause = query2.whereclause
-        if onclause is None:
-            onclause = literal(True)
+        wc2 = query2.whereclause
+        if wc2 is not None: 
+            merge_conds.append(wc2)
+        onclause = sql_and(*merge_conds) if merge_conds else literal(True)
         joined_from = from1.join(from2, isouter=True, onclause=onclause)
         return query1.with_only_columns(*allcols).select_from(joined_from)
+
 
     def queryPart(self, part:CompValue) -> SQLQuery:
         if part.name == "BGP":
