@@ -365,13 +365,12 @@ class TestR2RStore(unittest.TestCase):
                    }
                   }
                 }''', 
-                #XXX We should be able to get rid of the URIs...
                 '''
                 SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
                 FROM "Shippers" AS s, 
-                    (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr 
+                    (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr, s."ShipperID" AS "s_K0" 
                     FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1 
-                    WHERE concat('http://localhost:8890/Demo/shippers/', s."ShipperID") = anon_1.s
+                    WHERE s."ShipperID" = anon_1."s_K0"
                 '''
                 )
         
@@ -397,9 +396,9 @@ class TestR2RStore(unittest.TestCase):
                 '''
                 SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
                 FROM "Shippers" AS s, 
-                    (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr 
+                    (SELECT concat('http://localhost:8890/Demo/shippers/', s."ShipperID") AS s, sum(o."Freight") AS total_fr, s."ShipperID" AS "s_K0" 
                     FROM "Shippers" AS s, "Orders" AS o WHERE s."ShipperID" = o."ShipVia") AS anon_1 
-                    WHERE concat('http://localhost:8890/Demo/shippers/', s."ShipperID") = anon_1.s
+                    WHERE s."ShipperID" = anon_1."s_K0"
                 '''
             )
         

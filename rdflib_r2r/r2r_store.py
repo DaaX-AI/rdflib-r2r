@@ -173,7 +173,9 @@ def get_column_table(column: ColumnElement):
     # Template expansion
     if column._annotations and "expansion_of" in column._annotations:
         exp = column._annotations["expansion_of"]
-        return exp["table"]
+        tab = exp.get("table", None)
+        if tab is not None:
+            return tab
     
     # Label?
     if isinstance(column, Label):
@@ -237,14 +239,49 @@ def as_simple_select(query:SQLQuery) ->Select:
         return wrap_in_select(query)
 
 def wrap_in_select(query:SQLQuery) -> Select:
+    # For all template-based columns,
+    #   - Add a new exported column for each template column
+    #   - Add an annotation on the template column pointing to the exported template columns.
+    exp_info_specs = {}
+    if isinstance(query, Select):
+        names2cols = get_named_columns(query)
+        extra_cols = []
+        for c in query.exported_columns:
+            if isinstance(c, NamedColumn):
+                ei = get_template_expansion_info(c)
+                if ei is not None:
+                    col_vars = {}
+                    for i, (cn,col) in enumerate(ei["columns"].items()):
+                        name0 = f"{c.name}_K{i}"
+                        name = name0
+                        j = 0
+                        while name in names2cols:
+                            name = f"{name0}_{j}"
+                            j += 1
+                        extra_cols.append(col.label(name))
+                        col_vars[cn] = name
+                    exp_info_specs[c.name] = { "template": ei["template"], "vars": col_vars}
+
+        query = query.with_only_columns(*query.exported_columns, *extra_cols)
+
     sq = query.subquery()
-    return select(*[col.label(col.key) for col in sq.exported_columns])
+
+    result_cols = []
+    for col in sq.exported_columns:
+        ei_spec = exp_info_specs.get(col.key,None)
+        if ei_spec is not None:
+            col = col._annotate({"expansion_of": {"template": ei_spec["template"], "columns": { cn: sq.exported_columns[v] for cn,v in ei_spec["vars"].items() } }})
+        col = col.label(col.key)
+        result_cols.append(col)
+
+    return select(*result_cols)
+
+def get_template_expansion_info(e:Any):
+    while isinstance(e,Label):
+        e = e.element
+    return e._annotations.get("expansion_of", None) if isinstance(e, ClauseElement) else None
 
 def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElement|None:
-    def get_expansion_info(e:Any):
-        while isinstance(e,Label):
-            e = e.element
-        return e._annotations.get("expansion_of", None) if isinstance(e, ClauseElement) else None
     
     def try_template_to_literal_match(exp_info, lc):
         if hasattr(lc, "is_literal") and lc.is_literal:
@@ -261,8 +298,8 @@ def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElem
                     return sql_and(*eqs) if eq else sql_or(*eqs)
         return None
     
-    exp_info_a = get_expansion_info(a)
-    exp_info_b = get_expansion_info(b)
+    exp_info_a = get_template_expansion_info(a)
+    exp_info_b = get_template_expansion_info(b)
 
     if exp_info_b is None:
         if exp_info_a is not None:
