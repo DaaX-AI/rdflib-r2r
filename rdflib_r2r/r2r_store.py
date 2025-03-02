@@ -33,7 +33,7 @@ from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, 
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import Select, distinct, case, Function, ClauseElement
-from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause
+from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause, FromClause, Join
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
 
@@ -228,6 +228,12 @@ def is_simple_select(stmt:SQLQuery) -> bool:
 
 def as_select(query:SQLQuery) ->Select:
     return query if isinstance(query, Select) else wrap_in_select(query)
+
+def as_simple_select(query:SQLQuery) ->Select:
+    if isinstance(query, Select) and is_simple_select(query):
+        return query
+    else:
+        return wrap_in_select(query)
 
 def wrap_in_select(query:SQLQuery) -> Select:
     sq = query.subquery()
@@ -693,33 +699,62 @@ class R2RStore(Store, ABC):
 
     def queryLeftJoin(self, part) -> SQLQuery:
 
-        #XXX Horribly broken!
-        query1 = self.queryPart(part.p1)
-        query2 = self.queryPart(part.p2)
-
-        j1 = query1.alias('j1')
-        j2 = query2.alias('j2')
+        query1 = as_simple_select(self.queryPart(part.p1))
+        query2 = as_simple_select(self.queryPart(part.p2))
 
         allcols = []
-        names1 = set()
-        for c in j1.exported_columns:
+        names2cols1:Mapping[str,ColumnElement] = {}
+        for c in query1.exported_columns:
             if isinstance(c, NamedColumn):
-                names1.add(c.name)
                 c = c.label(c.name)
+                names2cols1[c.name] = c
             allcols.append(c)
 
-        common_names = set()
-        for c in j2.exported_columns:
+        ons:List[ColumnElement[bool]] = []
+        for c in query2.exported_columns:
             if isinstance(c, NamedColumn):
-                if c.name in names1:
-                    common_names.add(c.name)
+                c = c.label(c.name)
+                c1 = names2cols1.get(c.name, None)
+                if c1 is not None:
+                    ons += list(equal(c1,c))
                     continue
-                c = c.label(c.name)
             allcols.append(c)
 
+        def get_from(q:Select, exclude_from: FromClause|None = None):
 
-        ons = [ j1.exported_columns[n] == j2.exported_columns[n] for n in common_names ]
-        return  as_select(query1).outerjoin(as_select(query2).subquery(), onclause=sql_and(*ons))
+            def contains(parent:FromClause, child:FromClause):
+                if child is parent:
+                    return True
+                if isinstance(parent,Join):
+                    if not parent.full:
+                        if contains(parent.left, child):
+                            return True
+                    if not parent.isouter:
+                        if contains(parent.right, child):
+                            return True
+                return False
+
+            combined_from = None
+            for f in q.get_final_froms():
+                if exclude_from is not None and contains(exclude_from, f):
+                    continue
+                if combined_from is None:
+                    combined_from = f
+                else:
+                    combined_from = combined_from.join(f, onclause=literal(True))
+            return combined_from
+
+        from1 = get_from(query1)
+        from2 = get_from(query2, exclude_from=from1)
+
+        assert from1 is not None
+        assert from2 is not None
+
+        onclause = query2.whereclause
+        if onclause is None:
+            onclause = literal(True)
+        joined_from = from1.join(from2, isouter=True, onclause=onclause)
+        return query1.with_only_columns(*allcols).select_from(joined_from)
 
     def queryPart(self, part:CompValue) -> SQLQuery:
         if part.name == "BGP":

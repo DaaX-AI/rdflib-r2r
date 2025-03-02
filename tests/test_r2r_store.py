@@ -484,6 +484,13 @@ class TestR2RStore(unittest.TestCase):
             WHERE EXISTS (SELECT * FROM "Orders" AS o WHERE s."ShipperID" = o."ShipVia")'''
         )
 
+    def test_simple_left_join(self):
+        self.check(
+            '''SELECT ?shid ?fr { ?s a Demo:Shippers. ?s Demo:shipperid ?shid. OPTIONAL { ?o a Demo:Orders. ?s Demo:shippers_of_orders ?o. ?o Demo:freight ?fr. }  }''',
+                   '''SELECT s."ShipperID" AS shid, o."Freight" AS fr 
+                   FROM "Shippers" AS s LEFT OUTER JOIN "Orders" AS o ON s."ShipperID" = o."ShipVia"'''
+        )
+
     @unittest.expectedFailure
     def test_left_join(self):
         self.check('''SELECT ?shid ?fr { ?s a Demo:Shippers. OPTIONAL { ?o a Demo:Orders. ?s Demo:shippers_of_orders ?o. ?o Demo:freight ?fr. } ?s Demo:shipperid ?shid. }''',
