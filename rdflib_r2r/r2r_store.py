@@ -15,6 +15,7 @@ The mapped SQL database as an RDF graph store object
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from io import StringIO
+from string import Formatter
 from typing import Any, Generator, Mapping, Optional, List, Dict, Set, Tuple, cast, TypeVar, Sequence
 import logging
 import base64
@@ -27,7 +28,7 @@ from rdflib.util import from_n3
 from rdflib.term import Node
 from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
-from sqlalchemy.sql import ColumnElement
+from sqlalchemy.sql import ColumnElement, func as sqlfunc, literal
 import sqlalchemy.sql.operators
 from sqlalchemy import ColumnElement, CompoundSelect, Label,  except_, literal, select, null, literal_column, Dialect, Subquery
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
@@ -38,6 +39,7 @@ from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
 
 from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
+from rdflib_r2r.new_r2r_store import get_col 
 from rdflib_r2r.types import SQLQuery, BGP
 from rdflib_r2r.r2r_mapping import iri_safe, toPython
 
@@ -239,11 +241,53 @@ def wrap_in_select(query:SQLQuery) -> Select:
     sq = query.subquery()
     return select(*[col.label(col.key) for col in sq.exported_columns])
 
+def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElement|None:
+    exp_info_a = a._annotations.get("expansion_of", None)
+    if exp_info_a is None:
+        return None
+    exp_info_b = b._annotations.get("expansion_of", None)
+    if exp_info_b is None:
+        if hasattr(b, "is_literal") and b.is_literal:
+            bv = b.value
+            if isinstance(bv, str):
+                d = parse_with_template(bv, exp_info_a["template"])
+                if d is not None:
+                    eqs = []
+                    for k,v in exp_info_a["columns"].items():
+                        if k in d:
+                            eqs.append(v == literal(d[k]) if eq else v != literal(d[k]))
+                        else:
+                            return None
+                    return sql_and(*eqs) if eq else sql_or(*eqs)
+        return None
+    
+    if exp_info_a["template"] != exp_info_b["template"]:
+        return None
 
-def equal(*expressions, eq=True) -> Generator[ColumnElement,None,None]:
+    eqs = []
+    for k, va in exp_info_a["columns"].items():
+        vb = exp_info_b["columns"].get(k, None)
+        if vb is not None:
+            eqs.append(va == vb if eq else va != vb)
+        else:
+            return None
+    return sql_and(*eqs) if eq else sql_or(*eqs)
+
+
+def equal(*expressions:ColumnElement, eq=True) -> Generator[ColumnElement,None,None]:
     if expressions:
         e0, *es = expressions
         for e in es:
+            if "expansion_of" in e0._annotations:
+                r = try_match_templates(e0, e, eq)
+                if r is not None:
+                    yield r
+                    continue
+            if "expansion_of" in e._annotations:
+                r = try_match_templates(e, e0, eq)
+                if r is not None:
+                    yield r
+                    continue  
             yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
 
 def collect_external_named_vars(part:CompValue, stop_at:CompValue|None, dest:Set[str]):
@@ -369,7 +413,7 @@ def combine_from_clauses(q:Select, exclude_from: FromClause|None = None):
 def merge_exported_columns(query1, query2):
     allcols = []
     merge_conds = []
-    names2cols1:dict[str,ClauseElement] = {}
+    names2cols1:dict[str,ColumnElement] = {}
     for c in query1.exported_columns:
         if isinstance(c, NamedColumn):
             c = c.label(c.name)
@@ -841,5 +885,36 @@ class R2RStore(Store, ABC):
 
 def expr_to_str(ex:ColumnElement):
     return str(ex.compile(compile_kwargs={"literal_binds": True}))
+
+def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
+    format_tuples = Formatter().parse(template)
+    parts:List[ColumnElement] = []
+    columns = {}
+    for prefix, colname, _, _ in format_tuples:
+        if prefix != "":
+            parts.append(literal(prefix))
+        if colname:
+            col = get_col(tab, colname)
+            parts.append(col)
+            columns[colname] = col
+
+    return sqlfunc.concat(*parts)._annotate({"expansion_of": { "template": template, "table": tab.name, "columns": columns}})
+
+
+def parse_with_template(s:str, template:str) -> Optional[Dict[str, str]]:
+    format_tuples = Formatter().parse(template)
+    pattern = StringIO()
+    columns = []
+    for prefix, colname, _, _ in format_tuples:
+        if prefix:
+            pattern.write(re.escape(prefix))
+        if colname:
+            columns.append(colname)
+            pattern.write('(.*)')
+
+    match = re.fullmatch(pattern.getvalue(), s)
+    if not match:
+        return None
+    return {col: match[i+1] for i, col in enumerate(columns)}
 
     ############################################## OLD STUFF #################################################

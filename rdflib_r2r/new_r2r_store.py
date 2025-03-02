@@ -1,17 +1,14 @@
 from dataclasses import dataclass, replace
-from io import StringIO
-import re
-from string import Formatter
 from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
 from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
-from sqlalchemy import Alias, types as sqltypes, MetaData
+from sqlalchemy import Alias, MetaData
 from sqlalchemy.engine import Engine
-from sqlalchemy.sql import ColumnElement, select, literal_column, literal, func as sqlfunc
+from sqlalchemy.sql import ColumnElement, select, literal_column, literal
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
 from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, expr_to_str, iter_opt, results_union, sql_and
+from rdflib_r2r.r2r_store import R2RStore, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -78,36 +75,6 @@ class ProcessingState:
 
 def get_col(tab:NamedFromClause, col_name:str) -> ColumnElement:
     return tab.c[col_name]
-
-def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
-    format_tuples = Formatter().parse(template)
-    parts:List[ColumnElement] = []
-    for prefix, colname, _, _ in format_tuples:
-        if prefix != "":
-            parts.append(literal(prefix))
-        if colname:
-            col = get_col(tab, colname)
-            parts.append(col)
-            if get_python_column_type(tab, colname) != str:
-                col = sqlfunc.cast(col, sqltypes.VARCHAR)
-
-    return sqlfunc.concat(*parts)._annotate({'expansion_of': {'template': template, 'table': tab}})
-
-def parse_with_template(s:str, template:str) -> Optional[Dict[str, str]]:
-    format_tuples = Formatter().parse(template)
-    pattern = StringIO()
-    columns = []
-    for prefix, colname, _, _ in format_tuples:
-        if prefix:
-            pattern.write(re.escape(prefix))
-        if colname:
-            columns.append(colname)
-            pattern.write('(.*)')
-
-    match = re.fullmatch(pattern.getvalue(), s)
-    if not match:
-        return None
-    return {col: match[i+1] for i, col in enumerate(columns)}
 
 def get_python_column_type(tab:FromClause, col_name:str) -> Optional[Type[Any]]:
     #if isinstance(tab, FromClauseAlias):
