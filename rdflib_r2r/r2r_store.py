@@ -38,8 +38,7 @@ from sqlalchemy.sql.selectable import _CompoundSelectKeyword, NamedFromClause, F
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.engine import Engine
 
-from rdflib_r2r.expr_template import ExpressionTemplate, SubForm
-from rdflib_r2r.new_r2r_store import get_col 
+from rdflib_r2r.expr_template import SubForm
 from rdflib_r2r.types import SQLQuery, BGP
 from rdflib_r2r.r2r_mapping import iri_safe, toPython
 
@@ -894,7 +893,7 @@ def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
         if prefix != "":
             parts.append(literal(prefix))
         if colname:
-            col = get_col(tab, colname)
+            col = tab.c[colname]
             parts.append(col)
             columns[colname] = col
 

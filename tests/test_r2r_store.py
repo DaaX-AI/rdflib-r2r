@@ -365,7 +365,7 @@ class TestR2RStore(unittest.TestCase):
                    }
                   }
                 }''', 
-                #XXX We should be able to get rid of the anon1 select layer...
+                #XXX We should be able to get rid of the URIs...
                 '''
                 SELECT s."CompanyName" AS cn, anon_1.total_fr AS total_fr 
                 FROM "Shippers" AS s, 

@@ -73,13 +73,10 @@ class ProcessingState:
         else:
             return self
 
-def get_col(tab:NamedFromClause, col_name:str) -> ColumnElement:
-    return tab.c[col_name]
-
 def get_python_column_type(tab:FromClause, col_name:str) -> Optional[Type[Any]]:
     #if isinstance(tab, FromClauseAlias):
     #    tab = tab.element
-    col = get_col(cast(NamedFromClause, tab), col_name)
+    col = tab.c[col_name]
     return col.type.python_type
 
 def same_expressions(ex1:ColumnElement, ex2:ColumnElement):
@@ -252,7 +249,7 @@ class NewR2rStore(R2RStore):
                 #if position == "O":
                 #    is_iri = False
 
-                colex = get_col(tab, str(column))
+                colex = tab.c[str(column)]
                 if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, colex)
                 else:
@@ -274,7 +271,7 @@ class NewR2rStore(R2RStore):
                                 pval = ptype(val)
                             else:
                                 pval = val #TODO ???
-                            wheres.append(get_col(tab, col) == pval)
+                            wheres.append(tab.c[col] == pval)
                         yield replace(st, wheres=st.wheres + wheres)
                     # The old brute-force way:
                     #yield replace(st, wheres=st.wheres + [expr == toPython(node)])
@@ -289,7 +286,7 @@ class NewR2rStore(R2RStore):
                         assert childColumn
                         parentColumn = mg.value(join, rr.parent)
                         assert parentColumn
-                        wheres.append(get_col(tab, str(childColumn)) == get_col(jrow.table, str(parentColumn)))
+                        wheres.append(tab.c[str(childColumn)] == jrow.table.c[str(parentColumn)])
 
                     jrst = replace(jrst, wheres = jrst.wheres + wheres)
                     yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)
