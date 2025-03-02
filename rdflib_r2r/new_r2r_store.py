@@ -8,7 +8,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.sql import ColumnElement, select, literal_column, literal
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
 from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and
+from rdflib_r2r.r2r_store import R2RStore, equal, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -229,7 +229,7 @@ class NewR2rStore(R2RStore):
                 if same_expressions(expr,vex):
                     yield st
                 else:
-                    yield replace(st, wheres=st.wheres + [vex == expr])
+                    yield replace(st, wheres=st.wheres + list(equal(vex, expr)))
             else:
                 yield replace(st, var_expressions={**st.var_expressions, node: expr})
 
@@ -253,7 +253,7 @@ class NewR2rStore(R2RStore):
                 if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, colex)
                 else:
-                    yield replace(st, wheres=st.wheres + [colex == toPython(node)])
+                    yield replace(st, wheres=st.wheres + list(equal(colex, toPython(node))))
                 return # Only one term spec is allowed
 
             for template in mg.objects(tm, rr.template):

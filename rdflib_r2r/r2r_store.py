@@ -241,18 +241,19 @@ def wrap_in_select(query:SQLQuery) -> Select:
     return select(*[col.label(col.key) for col in sq.exported_columns])
 
 def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElement|None:
-    exp_info_a = a._annotations.get("expansion_of", None)
-    if exp_info_a is None:
-        return None
-    exp_info_b = b._annotations.get("expansion_of", None)
-    if exp_info_b is None:
-        if hasattr(b, "is_literal") and b.is_literal:
-            bv = b.value
+    def get_expansion_info(e:Any):
+        while isinstance(e,Label):
+            e = e.element
+        return e._annotations.get("expansion_of", None) if isinstance(e, ClauseElement) else None
+    
+    def try_template_to_literal_match(exp_info, lc):
+        if hasattr(lc, "is_literal") and lc.is_literal:
+            bv = lc.value
             if isinstance(bv, str):
-                d = parse_with_template(bv, exp_info_a["template"])
+                d = parse_with_template(bv, exp_info["template"])
                 if d is not None:
                     eqs = []
-                    for k,v in exp_info_a["columns"].items():
+                    for k,v in exp_info["columns"].items():
                         if k in d:
                             eqs.append(v == literal(d[k]) if eq else v != literal(d[k]))
                         else:
@@ -260,6 +261,18 @@ def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElem
                     return sql_and(*eqs) if eq else sql_or(*eqs)
         return None
     
+    exp_info_a = get_expansion_info(a)
+    exp_info_b = get_expansion_info(b)
+
+    if exp_info_b is None:
+        if exp_info_a is not None:
+            return try_template_to_literal_match(exp_info_a, b)
+        else:
+            return None
+    elif exp_info_a is None:
+        return try_template_to_literal_match(exp_info_b, a)
+        
+    # Both have templates    
     if exp_info_a["template"] != exp_info_b["template"]:
         return None
 
@@ -277,17 +290,11 @@ def equal(*expressions:ColumnElement, eq=True) -> Generator[ColumnElement,None,N
     if expressions:
         e0, *es = expressions
         for e in es:
-            if "expansion_of" in e0._annotations:
-                r = try_match_templates(e0, e, eq)
-                if r is not None:
-                    yield r
-                    continue
-            if "expansion_of" in e._annotations:
-                r = try_match_templates(e, e0, eq)
-                if r is not None:
-                    yield r
-                    continue  
-            yield (e0 == e) if eq else (e0 != e) #TODO: disassemble templates
+            eqty = try_match_templates(e0, e, eq)
+            if eqty is not None:
+                yield eqty
+            else:    
+                yield (e0 == e) if eq else (e0 != e) 
 
 def collect_external_named_vars(part:CompValue, stop_at:CompValue|None, dest:Set[str]):
     if part is stop_at:
@@ -415,7 +422,6 @@ def merge_exported_columns(query1, query2):
     names2cols1:dict[str,ColumnElement] = {}
     for c in query1.exported_columns:
         if isinstance(c, NamedColumn):
-            c = c.label(c.name)
             names2cols1[c.name] = c
         allcols.append(c)
 
@@ -897,7 +903,7 @@ def format_template(template:str, tab:NamedFromClause) -> ColumnElement[str]:
             parts.append(col)
             columns[colname] = col
 
-    return sqlfunc.concat(*parts)._annotate({"expansion_of": { "template": template, "table": tab.name, "columns": columns}})
+    return sqlfunc.concat(*parts)._annotate({"expansion_of": { "template": template, "table": tab, "columns": columns}})
 
 
 def parse_with_template(s:str, template:str) -> Optional[Dict[str, str]]:

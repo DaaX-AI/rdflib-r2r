@@ -226,10 +226,10 @@ class TestR2RStore(unittest.TestCase):
                     ?ol a Demo:Order_Details; Demo:order_details_has_orders / Demo:orderid ?oid.
                    }
                 }''',
-                #XXX Should be able to get rid of: 1) URI packing/unpacking, 2) o0 because its primary key matches o.
+                #XXX Should be able to get rid of o0 because its primary key matches o.
                 '''SELECT count(*) AS COUNT 
                 FROM "Orders" AS o, "Order Details" AS ol, "Orders" AS o0 
-                WHERE o."OrderID" = o0."OrderID" AND concat('http://localhost:8890/Demo/orders/', ol."OrderID") = concat('http://localhost:8890/Demo/orders/', o0."OrderID")
+                WHERE o."OrderID" = o0."OrderID" AND ol."OrderID" = o0."OrderID"
                 ''')
 
     def test_orderby_limit(self):
