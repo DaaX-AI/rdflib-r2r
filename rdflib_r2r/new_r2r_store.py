@@ -1,6 +1,6 @@
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
-from rdflib import RDF, Graph, IdentifiedNode, URIRef, Variable, BNode
+from typing import Any, Callable, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
+from rdflib import RDF, Graph, IdentifiedNode, Literal, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
 from sqlalchemy import Alias, MetaData
@@ -91,11 +91,11 @@ def n3(nd:Node|Path|None|tuple[Node|None,Node|Path|None,Node|None], g:Graph|None
     else:
         return str(nd)
     
-def substitute_first_triple(triples: BGP, replacement_triples: List[SearchQuery]) -> Generator[List[SearchQuery], None, None]:
+def substitute_first_triple(triples: BGP, replacement_triples: List[SearchQuery], exclude_func:Callable[[Path],bool]) -> Generator[List[SearchQuery], None, None]:
     replacement_triples += triples[1:]
-    yield from resolve_paths_in_triples(replacement_triples)
+    yield from resolve_paths_in_triples(replacement_triples, exclude_func)
 
-def resolve_paths_in_triples(triples: BGP) -> Generator[List[SearchQuery], None, None]:
+def resolve_paths_in_triples(triples: BGP,  exclude_func: Callable[[Path],bool]) -> Generator[List[SearchQuery], None, None]:
     if not triples:
         yield []
         return
@@ -103,6 +103,10 @@ def resolve_paths_in_triples(triples: BGP) -> Generator[List[SearchQuery], None,
     t0 = triples[0]
     p = t0[1]
     if isinstance(p, SequencePath):
+        if exclude_func(p):
+            for ts in resolve_paths_in_triples(triples[1:], exclude_func):
+                yield [t0] + ts
+            return
         replacement_triples = []
         next_subj = t0[0]
         for p1 in p.args[:-1]:
@@ -110,24 +114,24 @@ def resolve_paths_in_triples(triples: BGP) -> Generator[List[SearchQuery], None,
             replacement_triples.append((next_subj, p1, obj))
             next_subj = obj
         replacement_triples.append((next_subj, p.args[-1], t0[2]))
-        yield from substitute_first_triple(triples, replacement_triples)
+        yield from substitute_first_triple(triples, replacement_triples, exclude_func)
     elif isinstance(p, AlternativePath):
         for p1 in p.args:
-            yield from substitute_first_triple(triples, [(t0[0], p1, t0[2])])
+            yield from substitute_first_triple(triples, [(t0[0], p1, t0[2])], exclude_func)
     elif isinstance (p, InvPath):
         if isinstance(t0[2], (URIRef, BNode, Variable)):
-            yield from substitute_first_triple(triples, [(t0[2], p.arg, t0[0])])
+            yield from substitute_first_triple(triples, [(t0[2], p.arg, t0[0])], exclude_func)
         else:
             raise ValueError("Literals not supported as inverse path objects")
     elif isinstance (p, Path):
         raise NotImplementedError("Unsupported path type: " + str(p))
     else:
-        for ts in resolve_paths_in_triples(triples[1:]):
+        for ts in resolve_paths_in_triples(triples[1:], exclude_func):
             yield [t0] + ts
 
 class NewR2rStore(R2RStore):
 
-    pomaps_by_predicate: Dict[URIRef|None, List[Node]]
+    pomaps_by_predicate: Dict[URIRef|Literal|None, List[Node]]
     metadata:MetaData
 
     def __init__(self, db: Engine, mapping_graph: Graph, base: str = "http://example.com/base/", configuration=None, identifier=None):
@@ -143,15 +147,19 @@ class NewR2rStore(R2RStore):
                     raise ValueError("Non-URI predicate")
             if not found:
                 raise NotImplementedError("TODO (2): Only constant predicates are supported in predicateObjectMaps")
+
+        self.add_synthetic_chain_triple_maps()
+
         self.metadata = MetaData()
         self.metadata.reflect(db)
-
-
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
+
+        def should_leave_path_alone(p:Path) -> bool:
+            return Literal(p.n3(self.mapping_graph.namespace_manager)) in self.pomaps_by_predicate
         
-        for rbgp in resolve_paths_in_triples(bgp):
+        for rbgp in resolve_paths_in_triples(bgp, should_leave_path_alone):
             q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=rbgp))
         resulting_states: List[ProcessingState] = []
 
@@ -185,8 +193,8 @@ class NewR2rStore(R2RStore):
         assert s
         assert p 
         assert o
-        if not isinstance(p, URIRef):
-            raise NotImplementedError("TODO (2): Only URIRef predicates are supported")
+        if not isinstance(p, (URIRef,Path)):
+            raise NotImplementedError("TODO (2): Only URIRef or Path predicates are supported")
 
         if p == RDF.type:
             if isinstance(o, SPARQLVariable):
@@ -198,7 +206,8 @@ class NewR2rStore(R2RStore):
                         for st1 in self.match_node_to_term_map(s, tm, "S", rst, row.table):
                             yield replace(st1, triples=st1.triples[1:])
 
-        poms = self.pomaps_by_predicate.get(p, [])
+        pkey = Literal(p.n3(self.mapping_graph.namespace_manager)) if isinstance(p, Path) else p
+        poms = self.pomaps_by_predicate.get(pkey, [])
         for pom in poms:
             for tm in mg.subjects(rr.predicateObjectMap, pom):
                 for stR in iter_opt(st.ensure_row(s,tm)):
@@ -208,9 +217,17 @@ class NewR2rStore(R2RStore):
                             for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
                                 yield replace(st3, triples=st3.triples[1:])
 
-    def match_node_to_term_map(self, node:Node, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
+    def match_node_to_term_map(self, node:Node|Path, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
                 tab:NamedFromClause) -> Generator[ProcessingState, None, None]:
         mg = self.mapping_graph
+        if isinstance(node, Path):
+            if position != "P":
+                return
+            for cs in mg.objects(term_map, SequencePath(rr.predicateMap, rr.chainStr)):
+                if node.n3(mg.namespace_manager) == str(cs):
+                    yield st
+            return
+
         if position == "S":
             map_property = rr.subjectMap
             shortcut_property = rr.subject
@@ -290,3 +307,61 @@ class NewR2rStore(R2RStore):
 
                     jrst = replace(jrst, wheres = jrst.wheres + wheres)
                     yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)
+
+    def add_synthetic_chain_triple_maps(self):
+
+        def add_synthetic_chain_tm(tm, pred1, pred2, col_name, inv):
+            pomap = BNode()
+            self.mapping_graph.add((tm, rr.predicateObjectMap, pomap))
+            ppmap = BNode()
+            assert isinstance(pred1, URIRef)
+            assert isinstance(pred2, URIRef)
+            chain_str = Literal(SequencePath(InvPath(pred1) if inv else pred1, pred2).n3(self.mapping_graph.namespace_manager))
+            self.mapping_graph.add((ppmap, rr.chainStr, chain_str))
+            self.mapping_graph.add((pomap, rr.predicateMap, ppmap))
+            omap = BNode()
+            self.mapping_graph.add((omap, rr.column, col_name))
+            self.mapping_graph.add((pomap, rr.objectMap, omap))
+            self.mapping_graph.add((tm, rr.predicateObjectMap, pomap))
+            self.pomaps_by_predicate.setdefault(chain_str, []).append(pomap)
+
+        for col_name, tm1, pred1, pred2  in  self.mapping_graph.query( # type: ignore
+                f'''
+                select ?col_name ?tm1 ?pred1 ?pred2  {{
+                    ?pomap rr:objectMap [
+                            rr:joinCondition [ rr:child ?col_name; rr:parent ?id_col ];
+                            rr:parentTriplesMap ?tm2
+                        ] ;
+                        (rr:predicate | rr:predicateMap / rr:constant) ?pred1.
+                    
+                    ?tm1 rr:predicateObjectMap ?pomap.
+
+                    ?tm2 rr:predicateObjectMap [
+                        (rr:predicate | rr:predicateMap / rr:constant) ?pred2;
+                        rr:objectMap [ rr:column ?id_col ]
+                    ]
+                }}
+                '''
+                ):
+            
+            add_synthetic_chain_tm(tm1, pred1, pred2, col_name, False)    
+
+        for col_name, tm2, pred1, pred2 in  self.mapping_graph.query( # type: ignore
+                f'''
+                select ?col_name ?tm2 ?pred1 ?pred2 {{
+                    ?pomap rr:objectMap [
+                            rr:joinCondition [ rr:child ?id_col; rr:parent ?col_name ];
+                            rr:parentTriplesMap ?tm2
+                        ] ;
+                        (rr:predicate | rr:predicateMap / rr:constant) ?pred2.
+                    
+                    ?tm1 rr:predicateObjectMap ?pomap, [
+                        (rr:predicate | rr:predicateMap / rr:constant) ?pred1;
+                        rr:objectMap [ rr:column ?id_col ]
+                    ].
+
+                    ?tm2 rr:logicalTable / rr:tableName ?table_name.
+                }}
+                '''
+                ):
+            add_synthetic_chain_tm(tm2, pred2, pred1, col_name, True)    

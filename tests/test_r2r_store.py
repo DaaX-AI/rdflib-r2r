@@ -15,13 +15,13 @@ def norm_ws(s:str|None) -> str|None:
         return None
     return re.sub(r'\s+', ' ', s).strip()
 
-DEMO_NS = Namespace("http://localhost:8890/Demo/")
+DEMO_NS = Namespace("http://localhost:8890/schemas/Demo/")
 OD_NS = Namespace(DEMO_NS["orders/"])
-
+rr = Namespace("http://www.w3.org/ns/r2rml#")
         
 class TestResolvePathsInTriples(unittest.TestCase):
     def check(self, triples:List[SearchQuery], resolved_triples:List[List[SearchQuery]]):
-        actual_triples_lists = list(resolve_paths_in_triples(triples))
+        actual_triples_lists = list(resolve_paths_in_triples(triples, lambda x: False))
         for i, (ac, exp) in enumerate(zip(actual_triples_lists, resolved_triples)):
             bnode_map = {}
             def error():
@@ -99,6 +99,8 @@ class TestR2RStore(unittest.TestCase):
 
     def setUp(self):
         TestR2RStore.setup_db(self)
+        if self._testMethodName == "test_column_for_direct_path":
+            self.patch_graph_for_test_column_for_direct_path()
         self.store = NewR2rStore(self.db, self.mapping_graph)
         self.maxDiff = None
 
@@ -488,12 +490,38 @@ class TestR2RStore(unittest.TestCase):
                    FROM "Shippers" AS s LEFT OUTER JOIN "Orders" AS o ON s."ShipperID" = o."ShipVia"'''
         )
 
-    #@unittest.expectedFailure
     def test_left_join(self):
         self.check('''SELECT ?shid ?fr { ?s a Demo:Shippers. OPTIONAL { ?o a Demo:Orders. ?s Demo:shippers_of_orders ?o. ?o Demo:freight ?fr. } ?s Demo:shipperid ?shid. }''',
                    '''SELECT s."ShipperID" AS shid, o."Freight" AS fr 
                    FROM "Shippers" AS s LEFT OUTER JOIN "Orders" AS o ON s."ShipperID" = o."ShipVia"''')        
+        
+    def test_column_for_inverse_path(self):
+        self.check('''SELECT ?oid ?shid { ?o a Demo:Orders; Demo:orderid ?oid; ^Demo:shippers_of_orders / Demo:shipperid ?shid }''',
+                   '''SELECT o."OrderID" AS oid, o."ShipVia" AS shid FROM "Orders" AS o''')
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    unittest.main()
+
+    def patch_graph_for_test_column_for_direct_path(self):
+        #1. Find the right object map.
+        om = list(self.mapping_graph.query( 
+            '''select ?om {
+                ?tm rr:logicalTable [  rr:tableName "Order Details" ];
+                  rr:predicateObjectMap [ rr:predicateMap [ rr:constant Demo:order_details_has_orders ] ; rr:objectMap ?om ]
+            }
+            '''
+        ))[0][0] # type: ignore
+
+        #2. Remove the template mapping
+        self.mapping_graph.remove((om, rr.template, None))
+
+        #3. Add join-based mapping instead.
+        tm = list(self.mapping_graph.subjects(SequencePath(rr.logicalTable, rr.tableName), Literal("Orders")))[0]
+        self.mapping_graph.add((om, rr.parentTriplesMap, tm))
+        jc = BNode()
+        self.mapping_graph.add((om, rr.joinCondition, jc))
+        self.mapping_graph.add((jc, rr.child, Literal("OrderID")))
+        self.mapping_graph.add((jc, rr.parent, Literal("OrderID")))
+
+    def test_column_for_direct_path(self):
+        # Note: graph patched in setUp
+        self.check('''SELECT ?od ?oid { ?od a Demo:Order_Details; Demo:order_details_has_orders / Demo:orderid ?oid }''',
+                   '''SELECT concat('http://localhost:8890/Demo/order_details/', od."OrderID", '/', od."ProductID") AS od, od."OrderID" AS oid FROM "Order Details" AS od''')
