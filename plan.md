@@ -2,6 +2,7 @@
 
 ### Bugs
 - [ ] dates come out as strings (but maybe that's OK if we convert back to SQL?)
+- [ ] In a SPARQL join, class info should propagate between branches.
 
 ### Features and improvements
 - [ ] Left joins
