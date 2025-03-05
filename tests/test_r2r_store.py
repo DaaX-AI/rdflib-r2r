@@ -525,3 +525,10 @@ class TestR2RStore(unittest.TestCase):
         # Note: graph patched in setUp
         self.check('''SELECT ?od ?oid { ?od a Demo:Order_Details; Demo:order_details_has_orders / Demo:orderid ?oid }''',
                    '''SELECT concat('http://localhost:8890/Demo/order_details/', od."OrderID", '/', od."ProductID") AS od, od."OrderID" AS oid FROM "Order Details" AS od''')
+
+
+    def test_cast(self):
+        self.check(
+            'SELECT (xsd:decimal(42) AS ?flt42) { }',
+            '''SELECT CAST(42 AS NUMERIC) AS flt42'''
+            )    

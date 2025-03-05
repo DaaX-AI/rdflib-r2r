@@ -629,7 +629,7 @@ class R2RStore(Store, ABC):
                 if expr.iri in XSDToSQL:
                     for e in expr.expr:
                         cf = self.queryExpr(e, var_cf)
-                        return sqlfunc.cast(cf.expr(), XSDToSQL[expr.iri])
+                        return sqlfunc.cast(cf.expr, XSDToSQL[expr.iri])
                 if expr.iri.startswith(SQL_FUNC):
                     func_name = expr.iri[len(SQL_FUNC):]
                     func = getattr(sqlfunc, func_name, None)
