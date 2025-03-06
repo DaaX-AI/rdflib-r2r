@@ -152,8 +152,9 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 except:
                     recover()
 
-            rlast = results[-1]
-            logging.info(f"Q{rlast[0]}: {rlast[1]}, {rlast[2]} results, error: {rlast[3] or 'None'}, first: {rlast[4] or 'None'}")
+            if results:
+                rlast = results[-1]
+                logging.info(f"Q{rlast[0]}: {rlast[1]}, {rlast[2]} results, error: {rlast[3] or 'None'}, first: {rlast[4] or 'None'}")
 
         return results
     
