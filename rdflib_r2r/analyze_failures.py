@@ -74,6 +74,11 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
         cxn = pyodbc.connect(connect_str, password=dbpass, timeout=300)
         cxn.timeout = 300 # The value passes to connect above seems to be ignored?
         return cxn
+    
+    def produce(id:Hashable, t:float, result_count:int|None, err:str|None, first:str|None):
+        dt = nice_dec(t)
+        logging.info(f"Q{id}: {dt}, {result_count} results, error: {err or 'None'}, first: {first or 'None'}")
+        results.append((id, dt, result_count, err, first))
 
     conn = connect()
     conn.execute('select 1')
@@ -124,7 +129,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 continue
 
             if not isinstance(sql, str) or not re.sub(r'--.*','', sql).strip(): # Only comments:
-                results.append((id, Decimal("nan"), None, None, None))
+                produce(id, float("nan"), None, None, None)
                 continue
 
             result_count=None
@@ -135,7 +140,7 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
                 t1 = time.time()
                 result_count = len(qrs)
                 
-                results.append((id, nice_dec(t1-t0), result_count, err, str(qrs[0]) if qrs else None))
+                produce(id, t1-t0, result_count, err, str(qrs[0]) if qrs else None)
                 done_ids.add(id)
             except KeyboardInterrupt:
                 break
@@ -144,17 +149,13 @@ def calculate_timings(connect_str:str, dbpass:str, df:pandas.DataFrame, results:
             except Exception as e:
                 t1 = time.time()
                 err=str(e)
-                results.append((id, nice_dec(t1-t0), result_count, err, None))
+                produce(id, t1-t0, result_count, err, None)
                 done_ids.add(id)
             finally:
                 try:
                     csr.cancel()
                 except:
                     recover()
-
-            if results:
-                rlast = results[-1]
-                logging.info(f"Q{rlast[0]}: {rlast[1]}, {rlast[2]} results, error: {rlast[3] or 'None'}, first: {rlast[4] or 'None'}")
 
         return results
     
