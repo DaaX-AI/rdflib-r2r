@@ -323,7 +323,7 @@ def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElem
     return sql_and(*eqs) if eq else sql_or(*eqs)
 
 
-def equal(*expressions:ColumnElement, eq=True) -> Generator[ColumnElement,None,None]:
+def equal(*expressions:ColumnElement, eq=True) -> Generator[ColumnElement[bool],None,None]:
     if expressions:
         e0, *es = expressions
         for e in es:
@@ -453,9 +453,9 @@ def combine_from_clauses(q:Select, exclude_from: FromClause|None = None):
             combined_from = combined_from.join(f, onclause=literal(True))
     return combined_from
 
-def merge_exported_columns(query1, query2):
-    allcols = []
-    merge_conds = []
+def merge_exported_columns(query1, query2) -> Tuple[List[NamedColumn], List[ColumnElement[bool]]]:
+    allcols:List[NamedColumn] = []
+    merge_conds:List[ColumnElement[bool]] = []
     names2cols1:dict[str,ColumnElement] = {}
     for c in query1.exported_columns:
         if isinstance(c, NamedColumn):
@@ -570,7 +570,7 @@ class R2RStore(Store, ABC):
         ...
 
  
-    def queryExpr(self, expr, var_cf:dict[str, ColumnElement]) -> ColumnElement:
+    def queryExpr(self, expr, var_cf:Mapping[str, ColumnElement]) -> ColumnElement:
         # TODO: this all could get really complicated with expression types...
         agg_funcs = {
             "Aggregate_Sample": lambda x: x,
@@ -824,6 +824,10 @@ class R2RStore(Store, ABC):
         query2 = as_simple_select(self.queryPart(part.p2))
 
         allcols, merge_conds = merge_exported_columns(query1, query2)
+        named_cols = { c.name: c for c in allcols }
+        if part.expr is not None:
+            if part.expr.name != "TrueFilter":
+                merge_conds.append(self.queryExpr(part.expr, named_cols))
 
         from1 = combine_from_clauses(query1)
         from2 = combine_from_clauses(query2, exclude_from=from1)

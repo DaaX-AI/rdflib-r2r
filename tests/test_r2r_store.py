@@ -552,6 +552,6 @@ class TestR2RStore(unittest.TestCase):
         SELECT "OH"."OrderID" AS "Order_Count", "OH_0"."OrderID" AS "Order_Count_0" 
         FROM "Orders" AS "OH" 
         LEFT OUTER JOIN "Orders" AS "OH_0" 
-        ON oh."OrderID" = oh_0."OrderID"
+        ON "OH"."OrderID" = "OH_0"."OrderID"
         '''
         )
