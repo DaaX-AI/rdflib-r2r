@@ -532,3 +532,26 @@ class TestR2RStore(unittest.TestCase):
             'SELECT (xsd:decimal(42) AS ?flt42) { }',
             '''SELECT CAST(42 AS NUMERIC) AS flt42'''
             )    
+        
+    def test_left_join_with_eq(self):
+        self.check(
+        '''
+        SELECT ?Order_Count ?Order_Count_0
+        {
+            ?OH a Demo:Orders; Demo:orderid ?Order_Count.
+            OPTIONAL
+            {
+                FILTER (?Order_Count = ?Order_Count_0)
+                {
+                    ?OH_0 a Demo:Orders; Demo:orderid ?Order_Count_0.
+                }
+            }
+        }
+        ''',
+        '''
+        SELECT "OH"."OrderID" AS "Order_Count", "OH_0"."OrderID" AS "Order_Count_0" 
+        FROM "Orders" AS "OH" 
+        LEFT OUTER JOIN "Orders" AS "OH_0" 
+        ON oh."OrderID" = oh_0."OrderID"
+        '''
+        )
