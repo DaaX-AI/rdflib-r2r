@@ -18,6 +18,7 @@ def generate_sql(df:pandas.DataFrame, db:sqlalchemy.Engine, mapping_file:str):
 
     mg = Graph().parse(mapping_file)
     store = NewR2rStore(db, mg)
+    logging.info(f"Generating {len(source_sparql)} SQL queries")
 
     for sparql in source_sparql:
         if not sparql:
