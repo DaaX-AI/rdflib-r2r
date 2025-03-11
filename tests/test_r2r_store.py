@@ -555,3 +555,33 @@ class TestR2RStore(unittest.TestCase):
         ON "OH"."OrderID" = "OH_0"."OrderID"
         '''
         )
+
+    #Bug #6
+    @unittest.expectedFailure
+    def test_named_subquery_expression_in_exists(self):
+        self.check(
+    '''
+    SELECT (COUNT(*) AS ?Churned_Customers)
+    {
+        FILTER (!EXISTS {
+            {
+                SELECT ?fr
+                {
+                    ?order_header_0 a Demo:Orders;
+                        Demo:freight ?fr.
+                }
+            }
+        })
+        {
+            ?order_header a Demo:Orders;
+                Demo:freight ?fr.
+        }
+    }''',
+    '''
+    SELECT count(*) AS "Churned_Customers" 
+    FROM "Orders" AS order_header 
+    WHERE NOT (EXISTS 
+        (SELECT * FROM 
+            (SELECT order_header_0."Freight" AS fr FROM "Orders" AS order_header_0)
+            AS anon_1) WHERE anon_1.fr = order_header."Freight")
+    ''')
