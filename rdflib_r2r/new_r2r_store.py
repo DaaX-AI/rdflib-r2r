@@ -3,7 +3,7 @@ from typing import Any, Callable, Dict, Generator, List, Literal as LiteralType,
 from rdflib import RDF, Graph, IdentifiedNode, Literal, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
-from sqlalchemy import Alias, MetaData
+from sqlalchemy import Alias, MetaData, Select
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import ColumnElement, select, literal_column, literal
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
@@ -177,7 +177,7 @@ class NewR2rStore(R2RStore):
         if not resulting_states:
             raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping_graph) for t in bgp]}")
         
-        query_elements = []
+        query_elements:List[Select] = []
         for rs in resulting_states:
             select_exprs = [ expr.label(str(var)) for var, expr in rs.var_expressions.items() if isinstance(var,Variable) ]
             result = select(*select_exprs)
@@ -185,6 +185,10 @@ class NewR2rStore(R2RStore):
                 result = result.where(sql_and(*rs.wheres))
             query_elements.append(result)
 
+        if len(query_elements) == 1:
+            self.current_project.add_variables_to_columns(query_elements[0])
+        # I believe we don't actually need to handle multiple results, because in all situations when we have them
+        # the composite query wil be wrapped in a Select before anything else interesting happens.
         return results_union(query_elements)
     
     def process_next_triple(self, st: ProcessingState) -> Generator[ProcessingState, None, None]:

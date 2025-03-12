@@ -438,6 +438,21 @@ class TestR2RStore(unittest.TestCase):
                 FROM "Shippers" AS sh, "Orders" AS o 
                 WHERE sh."ShipperID" = o."ShipVia" GROUP BY sh."ShipperID" HAVING count(DISTINCT o."OrderID") > 1''')
         
+    def test_subquery_in_aggregate(self):
+        self.check('''SELECT (MAX(?fr) AS ?MaxFreight) {
+                {
+                        SELECT ?fr
+                        {
+                            ?o a Demo:Orders; Demo:freight ?fr.
+                        }
+                    }
+                }
+                ''', 
+                '''SELECT max(anon_1.fr) AS "MaxFreight" 
+                FROM 
+                    (SELECT o."Freight" AS fr FROM "Orders" AS o) AS anon_1
+                ''')
+        
     def test_count_star(self):
         self.check('''SELECT (COUNT(*) AS ?ShippersWithMoreThanFiveOrders)
                 {
@@ -557,7 +572,6 @@ class TestR2RStore(unittest.TestCase):
         )
 
     #Bug #6
-    @unittest.expectedFailure
     def test_named_subquery_expression_in_exists(self):
         self.check(
     '''
@@ -583,5 +597,37 @@ class TestR2RStore(unittest.TestCase):
     WHERE NOT (EXISTS 
         (SELECT * FROM 
             (SELECT order_header_0."Freight" AS fr FROM "Orders" AS order_header_0)
-            AS anon_1) WHERE anon_1.fr = order_header."Freight")
+            AS anon_1 WHERE anon_1.fr = order_header."Freight"))
+    ''')
+        
+    #Bug #6
+    @unittest.expectedFailure
+    def test_two_subqueries_one_named_in_exists(self):
+        self.check(
+    '''
+    SELECT (COUNT(*) AS ?Churned_Customers)
+    {
+        FILTER (!EXISTS {
+            {
+                SELECT ?fr
+                {
+                    ?order_header_0 a Demo:Orders;
+                        Demo:freight ?fr.
+                }
+            }
+        })
+        {
+            select ?fr {
+                ?order_header a Demo:Orders;
+                    Demo:freight ?fr.
+            }
+        }
+    }''',
+    '''
+    SELECT count(*) AS "Churned_Customers" 
+    FROM (SELECT order_header."Freight" AS fr FROM "Orders" AS order_header) AS anon_1
+    WHERE NOT (EXISTS 
+        (SELECT * FROM 
+            (SELECT order_header_0."Freight" AS fr FROM "Orders" AS order_header_0)
+            AS anon_2 WHERE anon_2.fr = anon_1.fr))
     ''')

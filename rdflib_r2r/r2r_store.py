@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from io import StringIO
 from string import Formatter
-from typing import Any, Generator, Mapping, Optional, List, Dict, Set, Tuple, cast, TypeVar, Sequence
+from typing import Any, Generator, Mapping, Optional, List, Dict, Set, Tuple, cast, TypeVar, Sequence, Literal as LiteralType
 import logging
 import base64
 import re
@@ -475,12 +475,22 @@ def merge_exported_columns(query1, query2) -> Tuple[List[NamedColumn], List[Colu
 class CurrentProject:
     project: CompValue
     named_tables: Dict[Tuple[str,str],NamedFromClause]
+    vars_to_columns: Dict[str,ColumnElement]
 
     def __init__(self, project:CompValue):
         self.project = project
         self.named_tables = {}
         self.named_vars = set[str]();
+        self.vars_to_columns = {}
         collect_external_named_vars(self.project.p, None, self.named_vars)
+
+    def add_variables_to_columns(self, s:SQLQuery):
+        for e in s.exported_columns:
+            if isinstance(e, NamedColumn):
+                k = e.name
+                if k not in self.vars_to_columns:
+                    self.vars_to_columns[k] = e
+
 class R2RStore(Store, ABC):
     """
     Args:
@@ -571,7 +581,6 @@ class R2RStore(Store, ABC):
 
  
     def queryExpr(self, expr, var_cf:Mapping[str, ColumnElement]) -> ColumnElement:
-        # TODO: this all could get really complicated with expression types...
         agg_funcs = {
             "Aggregate_Sample": lambda x: x,
             "Aggregate_Count": sqlfunc.count,
@@ -702,10 +711,25 @@ class R2RStore(Store, ABC):
         assert self.current_project
         collect_external_named_vars(self.current_project.project.p, expr, external_vars)
         named_columns = get_named_columns(query)
-        corr_cols = [ c for n,c in named_columns.items() if n in external_vars ]
-        corr_froms = [ get_column_table(c) for c in corr_cols ]
-        corr_froms = [ f for f in corr_froms if f is not None ]
-        sq = as_select(query).with_only_columns('*', maintain_column_froms=True)
+        corr_froms = []
+        wheres = []
+        for n,c in named_columns.items():
+            if n in external_vars:
+                ec = self.current_project.vars_to_columns.get(n)
+                if ec is None:
+                    self.current_project.vars_to_columns[n] = c
+                    f = get_column_table(c)
+                else:
+                    f = get_column_table(ec)
+                    if not ec.compare(c):
+                        wheres += list(equal(c, ec))
+                if f is not None:
+                    corr_froms.append(f)
+        #corr_cols = [ c for n,c in named_columns.items() if n in external_vars ]
+        #corr_froms = [ get_column_table(c) for c in corr_cols ]
+        #corr_froms = [ f for f in corr_froms if f is not None ]
+
+        sq = as_select(query).with_only_columns('*', maintain_column_froms=True).where(*wheres)
         return sq.exists().correlate(*corr_froms)
 
     def queryFilter(self, part:CompValue) -> SQLQuery:
@@ -790,7 +814,10 @@ class R2RStore(Store, ABC):
         try:
             part_query = self.queryPart(part.p)
             expected_names = [str(v) for v in part.PV]
-            return project_query(part_query, expected_names)
+            result = project_query(part_query, expected_names)
+            if old_project is not None:
+                old_project.add_variables_to_columns(result)
+            return result
         finally:
             self._current_project = old_project
     
