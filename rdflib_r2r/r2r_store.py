@@ -760,7 +760,11 @@ class R2RStore(Store, ABC):
         # if is_simple_select(part_query):
         #     return part_query
         # else:
-        return wrap_in_select(part_query)
+
+        #Doing this in queryProject
+        #return wrap_in_select(part_query)
+        return part_query
+
 
     def queryJoin(self, part) -> SQLQuery:
         def is_empty(p):
@@ -814,6 +818,8 @@ class R2RStore(Store, ABC):
         try:
             part_query = self.queryPart(part.p)
             expected_names = [str(v) for v in part.PV]
+            if old_project is not None:
+                part_query = wrap_in_select(part_query)
             result = project_query(part_query, expected_names)
             if old_project is not None:
                 old_project.add_variables_to_columns(result)

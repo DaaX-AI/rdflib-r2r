@@ -601,7 +601,7 @@ class TestR2RStore(unittest.TestCase):
     ''')
         
     #Bug #6
-    @unittest.expectedFailure
+    #@unittest.expectedFailure
     def test_two_subqueries_one_named_in_exists(self):
         self.check(
     '''
