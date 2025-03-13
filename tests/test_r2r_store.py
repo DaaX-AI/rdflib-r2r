@@ -640,10 +640,10 @@ class TestR2RStore(unittest.TestCase):
         {
             SELECT DISTINCT ?oh_Customer_ID
             {
-            FILTER (?oh_Orde_Date >= "2022-01-01" && ?oh_OrderDate <= "2022-12-31")
+            FILTER (?oh_OrderDate >= "2022-01-01" && ?oh_OrderDate <= "2022-12-31")
             ?oh a Demo:Orders;
                 Demo:orderdate ?oh_OrderDate;
-                Demo:orders_has_customers/Demo:customerid ?oh_Customer_ID.
+                ^Demo:customers_of_orders/Demo:customerid ?oh_Customer_ID.
             }
         }
     }

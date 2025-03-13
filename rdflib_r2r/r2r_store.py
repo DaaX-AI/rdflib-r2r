@@ -832,9 +832,9 @@ class R2RStore(Store, ABC):
                 part_query = part_query.limit(limit)
 
             expected_names = [str(v) for v in part.PV]
-            if old_project is not None:
-                part_query = wrap_in_select(part_query)
             result = project_query(part_query, expected_names)
+            if old_project is not None:
+                result = wrap_in_select(result)
             if old_project is not None:
                 old_project.add_variables_to_columns(result)
             return result
