@@ -654,3 +654,7 @@ class TestR2RStore(unittest.TestCase):
         FROM "Orders" AS oh
         WHERE (oh."OrderDate" >= '2022-01-01') AND (oh."OrderDate" <= '2022-12-31')) AS anon_1
     ''')
+        
+    def test_neg(self):
+        self.check('''SELECT (-?t0_Freight AS ?neg_freight) { ?t0 a Demo:Orders. ?t0 Demo:freight ?t0_Freight. }''',
+                   '''SELECT -t0."Freight" AS neg_freight FROM "Orders" AS t0''')        

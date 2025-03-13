@@ -657,6 +657,10 @@ class R2RStore(Store, ABC):
                 cf = self.queryExpr(expr.expr, var_cf)
                 return sqlalchemy.not_(cf) 
             
+            if (expr.name == "UnaryMinus"):
+                cf = self.queryExpr(expr.expr, var_cf)
+                return -cf
+            
             if (expr.name == "Builtin_BOUND"):
                 cf = self.queryExpr(expr.arg, var_cf)
                 return sqlfunc.not_(cf.is_(None))
