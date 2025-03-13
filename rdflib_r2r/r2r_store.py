@@ -812,11 +812,25 @@ class R2RStore(Store, ABC):
         cf = self.queryExpr(part.expr, get_named_columns(part_query))
         return part_query.with_only_columns(*part_query.exported_columns, cf.label(str(part.var)))
 
-    def queryProject(self, part:CompValue) -> SQLQuery:
+    def queryProject(self, part:CompValue, start = -1, limit = -1, distinct = False) -> SQLQuery:
+        if part.name == "Slice":
+            return self.queryProject(part.p, part.start, part.length, distinct)
+        if part.name == "Distinct":
+            return self.queryProject(part.p, start, limit, True)
+        if part.name != "Project":
+            raise ValueError(f"Expected Project, got {part.name}")
+
         old_project = self._current_project
         self._current_project = CurrentProject(part)
         try:
             part_query = self.queryPart(part.p)
+            if distinct:
+                part_query = as_select(part_query).distinct()
+            if start >= 0:
+                part_query = part_query.offset(start)
+            if limit >= 0:
+                part_query = part_query.limit(limit)
+
             expected_names = [str(v) for v in part.PV]
             if old_project is not None:
                 part_query = wrap_in_select(part_query)
@@ -842,14 +856,6 @@ class R2RStore(Store, ABC):
 
     def queryUnion(self, part) -> SQLQuery:
         return results_union([self.queryPart(part.p1), self.queryPart(part.p2)])
-
-    def querySlice(self, part) -> SQLQuery:
-        query = self.queryPart(part.p)
-        if part.start:
-            query = query.offset(part.start)
-        if part.length:
-            query = query.limit(part.length)
-        return query
 
     def queryLeftJoin(self, part) -> SQLQuery:
 
@@ -883,7 +889,7 @@ class R2RStore(Store, ABC):
             return self.queryFilter(part)
         if part.name == "Extend":
             return self.queryExtend(part)
-        if part.name == "Project":
+        if part.name == "Project" or part.name == "Slice" or part.name == "Distinct":
             return self.queryProject(part)
         if part.name == "Join":
             return self.queryJoin(part)
@@ -895,15 +901,10 @@ class R2RStore(Store, ABC):
             q1 = self.queryPart(part.p1)
             q2 = self.queryPart(part.p2)
             return except_(q1,q2)
-        if part.name == "Distinct":
-            query = self.queryPart(part.p)
-            return as_select(query).distinct()
         if part.name == "OrderBy":
             return self.queryOrderBy(part)
         if part.name == "Union":
             return self.queryUnion(part)
-        if part.name == "Slice":
-            return self.querySlice(part)
         if part.name == "LeftJoin":
             return self.queryLeftJoin(part)
         if part.name == "SelectQuery":

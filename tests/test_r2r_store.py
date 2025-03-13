@@ -631,3 +631,26 @@ class TestR2RStore(unittest.TestCase):
             (SELECT order_header_0."Freight" AS fr FROM "Orders" AS order_header_0)
             AS anon_2 WHERE anon_2.fr = anon_1.fr))
     ''')
+
+    def test_select_distinct_in_subquery(self):
+        self.check(
+    '''
+    SELECT (COUNT(?oh_Customer_ID) AS ?Number_of_Customers_with_Purchases_in_2022)
+    {
+        {
+            SELECT DISTINCT ?oh_Customer_ID
+            {
+            FILTER (?oh_Orde_Date >= "2022-01-01" && ?oh_OrderDate <= "2022-12-31")
+            ?oh a Demo:Orders;
+                Demo:orderdate ?oh_OrderDate;
+                Demo:orders_has_customers/Demo:customerid ?oh_Customer_ID.
+            }
+        }
+    }
+    ''',
+    '''
+    SELECT count(anon_1."oh_Customer_ID") AS "Number_of_Customers_with_Purchases_in_2022"
+    FROM (SELECT DISTINCT oh."CustomerID" AS "oh_Customer_ID"
+        FROM "Orders" AS oh
+        WHERE (oh."OrderDate" >= '2022-01-01') AND (oh."OrderDate" <= '2022-12-31')) AS anon_1
+    ''')
