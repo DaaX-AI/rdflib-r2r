@@ -5,8 +5,8 @@ import unittest
 from sqlalchemy import create_engine, Engine, Connection, text
 
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
-from rdflib_r2r.new_r2r_store import NewR2rStore, resolve_paths_in_triples
-from rdflib_r2r.r2r_store import SQL_FUNC
+from rdflib_r2r.sql_converter import SQLConverter, resolve_paths_in_triples
+from rdflib_r2r.conversion_utils import SQL_FUNC
 from rdflib_r2r.types import SearchQuery
 from rdflib.paths import SequencePath, AlternativePath, InvPath, MulPath
 
@@ -76,7 +76,7 @@ class TestResolvePathsInTriples(unittest.TestCase):
                           ]
                     ])
 
-class TestR2RStore(unittest.TestCase):
+class TestSQLConverter(unittest.TestCase):
 
     db: Engine
     conn: Connection
@@ -84,7 +84,7 @@ class TestR2RStore(unittest.TestCase):
     ns_map: Mapping[str, URIRef]
 
     @staticmethod
-    def setup_db(target:"TestR2RStore|Type[TestR2RStore]"):
+    def setup_db(target:"TestSQLConverter|Type[TestSQLConverter]"):
         target.db = create_engine("sqlite+pysqlite:///:memory:")
         target.conn = target.db.connect()
         with open('tests/northwind/Northwind.sql') as f:
@@ -98,10 +98,10 @@ class TestR2RStore(unittest.TestCase):
         target.ns_map['sqlf'] = SQL_FUNC
 
     def setUp(self):
-        TestR2RStore.setup_db(self)
+        TestSQLConverter.setup_db(self)
         if self._testMethodName == "test_column_for_direct_path":
             self.patch_graph_for_test_column_for_direct_path()
-        self.store = NewR2rStore(self.db, self.mapping_graph)
+        self.store = SQLConverter(self.db, self.mapping_graph)
         self.maxDiff = None
 
     def check(self, sparql:str, expected_sql:str|None):

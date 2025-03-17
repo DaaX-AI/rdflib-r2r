@@ -12,7 +12,8 @@ import rdflib.plugins.sparql.evaluate as sparql_evaluate
 from rdflib import Variable
 from rdflib.plugins.sparql.sparql import FrozenBindings, QueryContext
 
-from rdflib_r2r.r2r_store import R2RStore, SparqlNotImplementedError
+from rdflib_r2r.conversion_utils import SparqlNotImplementedError
+from rdflib_r2r.r2r_store import R2RStore
 
 # copy the default RDFlib function for evaluating Basic Graph Patterns
 rdflib_evalPart = sparql_evaluate.evalPart
@@ -31,6 +32,7 @@ def optimize_sparql():
     """
 
     def __evalPart__(ctx: QueryContext, part):
+        assert ctx.graph
         # A SPARQL query executed over a non HDTStore is evaluated as usual
         if not isinstance(ctx.graph.store, R2RStore):
             return rdflib_evalPart(ctx, part)

@@ -9,15 +9,15 @@ import pyodbc
 import sqlalchemy
 from rdflib import Graph
 
-from rdflib_r2r.new_r2r_store import NewR2rStore
-from rdflib_r2r.r2r_store import SQL_FUNC
+from rdflib_r2r.sql_converter import SQLConverter
+from rdflib_r2r.conversion_utils import SQL_FUNC
 
 def generate_sql(df:pandas.DataFrame, db:sqlalchemy.Engine, mapping_file:str):
     source_sparql = df.loc[:,'sparql'].fillna('').tolist()
     results:List[Tuple[str,str,str]] = []
 
     mg = Graph().parse(mapping_file)
-    store = NewR2rStore(db, mg)
+    store = SQLConverter(db, mg)
     logging.info(f"Generating {len(source_sparql)} SQL queries")
 
     for sparql in source_sparql:

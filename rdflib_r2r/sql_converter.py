@@ -1,14 +1,15 @@
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Dict, Generator, List, Literal as LiteralType, Optional, Type, cast
+from typing import Any, Callable, Dict, Generator, List, Literal as LiteralType, Mapping, Optional, Type, cast
 from rdflib import RDF, Graph, IdentifiedNode, Literal, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
-from sqlalchemy import Alias, MetaData, Select
+from sqlalchemy import Alias, Dialect, MetaData, Select
 from sqlalchemy.engine import Engine
-from sqlalchemy.sql import ColumnElement, select, literal_column, literal
+from sqlalchemy.sql import ColumnElement, select, literal
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
+from rdflib_r2r.query_conversions import QueryConversions
 from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
-from rdflib_r2r.r2r_store import R2RStore, equal, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and
+from rdflib_r2r.conversion_utils import equal, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and, sql_pretty
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -36,7 +37,7 @@ def make_short_alias(name:str):
 
 @dataclass(frozen=True, eq=True, kw_only=True)
 class ProcessingState:
-    store:"NewR2rStore"
+    store:"SQLConverter"
     rows: Dict[Node,Row]
     var_expressions: Dict[SPARQLVariable, ColumnElement]
     wheres: List[ColumnElement[bool]]
@@ -129,13 +130,16 @@ def resolve_paths_in_triples(triples: BGP,  exclude_func: Callable[[Path],bool])
         for ts in resolve_paths_in_triples(triples[1:], exclude_func):
             yield [t0] + ts
 
-class NewR2rStore(R2RStore):
+class SQLConverter(QueryConversions):
 
     pomaps_by_predicate: Dict[URIRef|Literal|None, List[Node]]
     metadata:MetaData
+    dialect:Dialect
+    mapping_graph:Graph
 
-    def __init__(self, db: Engine, mapping_graph: Graph, base: str = "http://example.com/base/", configuration=None, identifier=None):
-        super().__init__(db, mapping_graph, base, configuration, identifier)
+    def __init__(self, db: Engine, mapping_graph: Graph):
+        super().__init__()
+        self.mapping_graph = mapping_graph
         self.pomaps_by_predicate = {}
         for pm in self.mapping_graph.objects(predicate=rr.predicateObjectMap, unique=True):
             found = False
@@ -152,6 +156,16 @@ class NewR2rStore(R2RStore):
 
         self.metadata = MetaData()
         self.metadata.reflect(db)
+        self.dialect = db.dialect
+
+    def getSQL(self, sparqlQuery, base:str|None=None, initNs:Mapping[str, Any] | None={}):
+        from rdflib.plugins.sparql.parser import parseQuery
+        from rdflib.plugins.sparql.algebra import translateQuery
+
+        parsetree = parseQuery(sparqlQuery)
+        queryobj = translateQuery(parsetree, base, initNs)
+        sql_query = self.queryPart(queryobj.algebra)
+        return sql_pretty(sql_query, dialect=self.dialect)        
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
