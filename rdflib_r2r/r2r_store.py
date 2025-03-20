@@ -61,11 +61,12 @@ class R2RStore(SPARQLStore):
               DEBUG: bool = False) -> Result:
         if initBindings:
             raise NotImplementedError
-        if queryGraph:
-            raise NotImplementedError
-        query_obj = query if isinstance(query, Query) else self.converter.parse_sparql_query(query)
+        # XXX Figure these out later
+        #if queryGraph:
+        #    raise NotImplementedError
+        query_obj = query if isinstance(query, Query) else self.converter.parse_sparql_query(query, base=self.base, initNs=initNs)
         vars = query_obj.algebra["PV"]
-        sql = self.converter.get_sql_query_object(query, base=self.base, initNs=initNs)
+        sql = self.converter.get_sql_query_object(query_obj)
         bindings = self.exec(sql)
         r = Result("SELECT")
         r.vars = vars

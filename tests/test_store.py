@@ -21,4 +21,17 @@ class TestStore(BaseSQLConvertingTest):
         self.assertEqual([(URIRef('http://localhost:8890/Demo/orders/10248'),DEMO_NS.orderid, Literal(10248))],
             list(self.g.triples((None, DEMO_NS.orderid, Literal(10248)))))
 
- 
+    # ASK not implemented
+    @unittest.expectedFailure
+    def test_confirm_product_name(self):
+        self.assertEqual([(URIRef('http://localhost:8890/Demo/products/1'), DEMO_NS.productname, Literal('Chai'))],
+            list(self.g.triples((URIRef('http://localhost:8890/Demo/products/1'), DEMO_NS.productname, Literal('Chai')))))        
+    
+    def test_get_product_name(self):
+        self.assertEqual([(URIRef('http://localhost:8890/Demo/products/1'), DEMO_NS.productname, Literal('Chai'))],
+            list(self.g.triples((URIRef('http://localhost:8890/Demo/products/1'), DEMO_NS.productname, None))))
+        
+    def test_get_products_a2z(self):
+        self.assertEqual([(Literal('Alice Mutton'),), (Literal('Aniseed Syrup'),)],
+            list(self.g.query(f'SELECT ?pn WHERE {{ ?product a Demo:Products; Demo:productname ?pn }} ORDER BY ?pn LIMIT 2', initNs=self.ns_map))
+        )
