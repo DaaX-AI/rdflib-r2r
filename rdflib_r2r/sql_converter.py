@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Generator, List, Literal as LiteralType,
 from rdflib import RDF, Graph, IdentifiedNode, Literal, URIRef, Variable, BNode
 from rdflib.term import Node
 from rdflib.paths import Path, AlternativePath, SequencePath, InvPath
+from rdflib.plugins.sparql.algebra import Query
 from sqlalchemy import Alias, Dialect, MetaData, Select
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import ColumnElement, select, literal
@@ -158,14 +159,26 @@ class SQLConverter(QueryConversions):
         self.metadata.reflect(db)
         self.dialect = db.dialect
 
-    def getSQL(self, sparqlQuery, base:str|None=None, initNs:Mapping[str, Any] | None={}):
+    def parse_sparql_query(self, sparqlQuery:str, base:str|None=None, initNs:Mapping[str, Any] | None={}) -> Query:
         from rdflib.plugins.sparql.parser import parseQuery
         from rdflib.plugins.sparql.algebra import translateQuery
 
         parsetree = parseQuery(sparqlQuery)
-        queryobj = translateQuery(parsetree, base, initNs)
-        sql_query = self.queryPart(queryobj.algebra)
-        return sql_pretty(sql_query, dialect=self.dialect)        
+        return translateQuery(parsetree, base, initNs)
+
+    def get_sql_query_object(self, sparqlQuery: str|Query, base:str|None=None, initNs:Mapping[str, Any] | None={}) -> SQLQuery:
+        from rdflib.plugins.sparql.parser import parseQuery
+        from rdflib.plugins.sparql.algebra import translateQuery
+
+        if isinstance(sparqlQuery, str):
+            queryobj = self.parse_sparql_query(sparqlQuery, base, initNs)
+        else:
+            queryobj = sparqlQuery
+
+        return self.queryPart(queryobj.algebra)
+
+    def getSQL(self, sparqlQuery: str|Query, base:str|None=None, initNs:Mapping[str, Any] | None={}):
+        return sql_pretty(self.get_sql_query_object(sparqlQuery, base, initNs), dialect=self.dialect)        
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
@@ -292,7 +305,8 @@ class SQLConverter(QueryConversions):
                 return # Only one term spec is allowed
 
             for template in mg.objects(tm, rr.template):
-                expr = format_template(str(template), tab)
+                is_iri = position == 'S' or position == 'P' or str(mg.value(tm, rr.termType)) == 'IRI'
+                expr = format_template(str(template), tab, is_iri)
                 if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, expr)
                 else:

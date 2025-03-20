@@ -75,21 +75,21 @@ class TestResolvePathsInTriples(unittest.TestCase):
                           (DEMO_NS.MyDog, DEMO_NS.master, DEMO_NS.Me)
                           ]
                     ])
-
-class TestSQLConverter(unittest.TestCase):
-
+        
+class BaseSQLConvertingTest(unittest.TestCase):
     db: Engine
     conn: Connection
     mapping_graph: Graph
     ns_map: Mapping[str, URIRef]
 
     @staticmethod
-    def setup_db(target:"TestSQLConverter|Type[TestSQLConverter]"):
+    def setup_db(target:"BaseSQLConvertingTest|Type[BaseSQLConvertingTest]"):
         target.db = create_engine("sqlite+pysqlite:///:memory:")
         target.conn = target.db.connect()
         with open('tests/northwind/Northwind.sql') as f:
             for stmt in f.read().split(';'):
                 target.conn.execute(text(stmt))
+        target.conn.commit()
         target.mapping_graph = Graph().parse('tests/northwind/NorthwindR2RML.ttl')
         target.ns_map = {}
         for prefix, ns in target.mapping_graph.namespaces():
@@ -98,16 +98,21 @@ class TestSQLConverter(unittest.TestCase):
         target.ns_map['sqlf'] = SQL_FUNC
 
     def setUp(self):
-        TestSQLConverter.setup_db(self)
+        BaseSQLConvertingTest.setup_db(self)
+        self.maxDiff = None
+
+class TestSQLConverter(BaseSQLConvertingTest):
+
+    def setUp(self):
+        super().setUp()
         if self._testMethodName == "test_column_for_direct_path":
             self.patch_graph_for_test_column_for_direct_path()
-        self.store = SQLConverter(self.db, self.mapping_graph)
-        self.maxDiff = None
+        self.conv = SQLConverter(self.db, self.mapping_graph)
 
     def check(self, sparql:str, expected_sql:str|None):
         # print("SPARQL:", sparql)
         # print("Expected SQL:", expected_sql)
-        actual_sql = self.store.getSQL(sparql, initNs=self.ns_map)
+        actual_sql = self.conv.getSQL(sparql, initNs=self.ns_map)
         # print("Actual SQL:", actual_sql)
         self.assertEqual(norm_ws(expected_sql), norm_ws(actual_sql))
 

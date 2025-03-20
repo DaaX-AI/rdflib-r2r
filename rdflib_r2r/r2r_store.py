@@ -1,6 +1,11 @@
+from typing import Any, Generator, Mapping, Optional
+from rdflib.plugins.sparql.sparql import Query
+from rdflib.query import Result
+from rdflib.term import Identifier
 from rdflib_r2r.conversion_utils import sql_pretty
 from rdflib_r2r.r2r_mapping import iri_safe
 from rdflib_r2r.sql_converter import SQLConverter
+from rdflib.plugins.stores.sparqlstore import SPARQLStore
 
 
 from rdflib import BNode, Graph, Literal, URIRef, Variable
@@ -9,6 +14,8 @@ from rdflib.plugins.sparql.parserutils import CompValue
 from rdflib.store import Store
 from rdflib.util import from_n3
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import NamedColumn
+from rdflib_r2r.conversion_utils import get_template_expansion_info
 
 
 import base64
@@ -16,8 +23,10 @@ import logging
 import re
 from abc import ABC
 
+from rdflib_r2r.types import SQLQuery
 
-class R2RStore(Store, ABC):
+
+class R2RStore(SPARQLStore):
 
     converter: SQLConverter
     """
@@ -32,7 +41,7 @@ class R2RStore(Store, ABC):
         configuration=None,
         identifier=None,
     ):
-        super(R2RStore, self).__init__(
+        super().__init__(
             configuration=configuration, identifier=identifier
         )
         self.db = db
@@ -41,6 +50,28 @@ class R2RStore(Store, ABC):
         self._current_project = None
         self.converter = SQLConverter(db, mapping_graph)
         assert self.db
+
+    def _query(self, query:str, default_graph: Optional[str] = None) -> Result:
+        if default_graph:
+            logging.warning(f"def graph: {default_graph}")
+        return self.query(query)
+
+    def query(self, query: Query | str, initNs: Mapping[str, Any] | None = None, 
+              initBindings: Mapping[str, Identifier] | None = None, queryGraph: str | None = None, 
+              DEBUG: bool = False) -> Result:
+        if initBindings:
+            raise NotImplementedError
+        if queryGraph:
+            raise NotImplementedError
+        query_obj = query if isinstance(query, Query) else self.converter.parse_sparql_query(query)
+        vars = query_obj.algebra["PV"]
+        sql = self.converter.get_sql_query_object(query, base=self.base, initNs=initNs)
+        bindings = self.exec(sql)
+        r = Result("SELECT")
+        r.vars = vars
+        r.bindings = bindings
+        return r
+
 
     def __len__(self, context=None) -> int:
         """The number of RDF triples in the DB mapping."""
@@ -71,10 +102,10 @@ class R2RStore(Store, ABC):
         uri = re.sub("<ENCODE>(.+?)</ENCODE>", lambda x: iri_safe(x.group(1)), iri)
         return URIRef(uri, base=self.base)
 
-    def make_node(self, val):
+    def make_node(self, val) -> Identifier:
         isstr = isinstance(val, str)
         if val is None:
-            return None
+            raise ValueError("None value in result")
         elif (not isstr) or (val[0] not in '"<_'):
             if type(val) == bytes:
                 return Literal(
@@ -92,47 +123,33 @@ class R2RStore(Store, ABC):
         elif val == "_:":
             return BNode()
         elif val.startswith("_:"):
-            return from_n3(val)
+            return BNode(val[2:])
         else:
-            return from_n3(val)
+            raise ValueError(f"Unexpected value: {val}")
 
-    def exec(self, query):
+    def exec(self, query:SQLQuery) -> Generator[Mapping[Variable, Identifier], None, None]:
         with self.db.connect() as conn:
-            logging.warning("Executing:\n" + sql_pretty(query))
-            # raise Exception
             results = conn.execute(query)
             rows = list(results)
             keys = [Variable(v) for v in results.keys()]
-            logging.warning(f"Got {len(rows)} rows of {keys}")
+            iris = set()
+            for c in query.exported_columns:
+                if isinstance(c, NamedColumn):
+                    ei = get_template_expansion_info(c)
+                    if ei and ei.is_iri:
+                        iris.add(c.name)
+
             first = True
             for vals in rows:
                 if first:
-                    logging.warning(f"First row: {vals}")
                     first = False
-                yield dict(zip(keys, [self.make_node(v) for v in vals]))
+                bindings = {}
+                for var, val in zip(keys, vals):
+                    bindings[var] = URIRef(val) if str(var) in iris else self.make_node(val)
+                yield bindings
 
 
     def evalPart(self, part:CompValue):
         query = self.converter.queryPart(part)
         return self.exec(query)
 
-    def create(self, configuration):
-        raise TypeError("The DB mapping is read only!")
-
-    def destroy(self, configuration):
-        raise TypeError("The DB mapping is read only!")
-
-    def commit(self):
-        raise TypeError("The DB mapping is read only!")
-
-    def rollback(self):
-        raise TypeError("The DB mapping is read only!")
-
-    def add(self, triple, context=None, quoted=False):
-        raise TypeError("The DB mapping is read only!")
-
-    def addN(self, quads):
-        raise TypeError("The DB mapping is read only!")
-
-    def remove(self, triple, context=None):
-        raise TypeError("The DB mapping is read only!")
