@@ -309,8 +309,7 @@ class SQLConverter(QueryConversions):
                 expr = format_template(str(template), tab, is_iri)
                 if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, expr)
-                else:
-                    #TODO check IRI vs literal
+                elif is_iri and isinstance(node, URIRef) or not is_iri and isinstance(node, Literal):
                     col_vals = parse_with_template(str(node), str(template))
                     if col_vals:
                         wheres = []
