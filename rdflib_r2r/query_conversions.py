@@ -1,7 +1,7 @@
 from sqlalchemy.sql.elements import NamedColumn
 from sqlalchemy.sql.selectable import NamedFromClause
 from rdflib_r2r.r2r_mapping import toPython
-from rdflib_r2r.conversion_utils import SQL_FUNC, SparqlNotImplementedError, XSDToSQL, already_includes, as_select, as_simple_select, collect_external_named_vars, combine_from_clauses, convert_pattern_to_like, equal, get_column_table, get_named_columns, merge_exported_columns, op, project_query, results_union, sql_pretty, wrap_in_select
+from rdflib_r2r.conversion_utils import SQL_FUNC, SparqlNotImplementedError, XSDToSQL, already_includes, as_select, as_simple_select, collect_external_named_vars, combine_from_clauses, convert_pattern_to_like, equal, get_column_table, get_named_columns, merge_exported_columns, op, project_query, results_union, sql_pretty, wrap_in_select, ImpossibleQueryException
 from rdflib_r2r.types import BGP, SQLQuery
 
 
@@ -332,7 +332,19 @@ class QueryConversions(ABC):
         return part_query.order_by(*ordering)
 
     def queryUnion(self, part) -> SQLQuery:
-        return results_union([self.queryPart(part.p1), self.queryPart(part.p2)])
+        parts = []
+        iqe = None
+        for p in [ part.p1, part.p2 ]:
+            try:
+                parts.append(self.queryPart(p))
+            except ImpossibleQueryException as e:
+                iqe = e
+
+        if parts:
+            return results_union(parts)
+        else:
+            assert iqe
+            raise iqe
 
     def queryLeftJoin(self, part) -> SQLQuery:
 

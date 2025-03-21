@@ -76,6 +76,10 @@ XSDToSQL = {
 
 SQL_FUNC = Namespace("http://daax.ai/sqlfunc/")
 
+class ImpossibleQueryException(Exception):
+    "Raised when we get a query to convert that is legal, but we can't convert it to anything that could possibly return any results."
+    pass
+
 def sql_pretty(query:SQLQuery, dialect:Optional[Dialect] = None) -> str:
     import sqlparse
 
@@ -89,6 +93,8 @@ def results_union(queries:Sequence[SQLQuery]) -> SQLQuery:
 
     if len(queries) == 1:
         return queries[0]
+    elif len(queries) == 0:
+        raise ImpossibleQueryException("Union of no queries")
 
     selects: List[Select] = []
     def add_selects(q:SQLQuery):

@@ -10,7 +10,7 @@ from sqlalchemy.sql import ColumnElement, select, literal
 from sqlalchemy.sql.selectable import NamedFromClause, FromClause
 from rdflib_r2r.query_conversions import QueryConversions
 from rdflib_r2r.r2r_mapping import _get_table, rr, toPython
-from rdflib_r2r.conversion_utils import equal, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and, sql_pretty
+from rdflib_r2r.conversion_utils import equal, expr_to_str, format_template, iter_opt, parse_with_template, results_union, sql_and, sql_pretty, ImpossibleQueryException
 from rdflib_r2r.types import BGP, SPARQLVariable, SQLQuery, SearchQuery
 import queue
 
@@ -177,8 +177,12 @@ class SQLConverter(QueryConversions):
 
         return self.queryPart(queryobj.algebra)
 
-    def getSQL(self, sparqlQuery: str|Query, base:str|None=None, initNs:Mapping[str, Any] | None={}):
-        return sql_pretty(self.get_sql_query_object(sparqlQuery, base, initNs), dialect=self.dialect)        
+    def getSQL(self, sparqlQuery: str|Query, base:str|None=None, initNs:Mapping[str, Any] | None={}) -> str|None:
+        try:
+            sql_query = self.get_sql_query_object(sparqlQuery, base, initNs)
+        except ImpossibleQueryException:
+            return None
+        return sql_pretty(sql_query, dialect=self.dialect)
             
     def queryBGP(self, bgp: BGP) -> SQLQuery:
         q = queue.Queue[ProcessingState]()
@@ -202,7 +206,7 @@ class SQLConverter(QueryConversions):
                         q.put(nst)
 
         if not resulting_states:
-            raise ValueError(f"Failed to translate to SQL: { [n3(t,self.mapping_graph) for t in bgp]}")
+            raise ImpossibleQueryException(f"Failed to translate to SQL: { [n3(t,self.mapping_graph) for t in bgp]}")
         
         query_elements:List[Select] = []
         for rs in resulting_states:

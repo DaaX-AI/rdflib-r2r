@@ -2,7 +2,7 @@ from typing import Any, Generator, Mapping, Optional
 from rdflib.plugins.sparql.sparql import Query
 from rdflib.query import Result
 from rdflib.term import Identifier
-from rdflib_r2r.conversion_utils import sql_pretty
+from rdflib_r2r.conversion_utils import ImpossibleQueryException, sql_pretty
 from rdflib_r2r.r2r_mapping import iri_safe
 from rdflib_r2r.sql_converter import SQLConverter
 from rdflib.plugins.stores.sparqlstore import SPARQLStore
@@ -66,8 +66,11 @@ class R2RStore(SPARQLStore):
         #    raise NotImplementedError
         query_obj = query if isinstance(query, Query) else self.converter.parse_sparql_query(query, base=self.base, initNs=initNs)
         vars = query_obj.algebra["PV"]
-        sql = self.converter.get_sql_query_object(query_obj)
-        bindings = self.exec(sql)
+        try:
+            sql = self.converter.get_sql_query_object(query_obj)
+        except ImpossibleQueryException:
+            sql = None
+        bindings = self.exec(sql) if sql is not None else []
         r = Result("SELECT")
         r.vars = vars
         r.bindings = bindings
@@ -150,7 +153,4 @@ class R2RStore(SPARQLStore):
                 yield bindings
 
 
-    def evalPart(self, part:CompValue):
-        query = self.converter.queryPart(part)
-        return self.exec(query)
 
