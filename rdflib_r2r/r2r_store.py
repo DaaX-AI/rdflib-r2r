@@ -60,7 +60,20 @@ class R2RStore(SPARQLStore):
               initBindings: Mapping[str, Identifier] | None = None, queryGraph: str | None = None, 
               DEBUG: bool = False) -> Result:
         if initBindings:
-            raise NotImplementedError
+            v = list(initBindings)
+            if isinstance(query, str):
+                query += "\nVALUES ( %s )\n{ ( %s ) }\n" % (
+                    " ".join("?" + str(x) for x in v),
+                    " ".join(self.node_to_sparql(initBindings[x]) for x in v),
+                )
+            else:
+                # Build the values into the right place in the query algebra
+                vals = CompValue("values", res=[{ Variable(k):v  for k,v in initBindings.items() }])
+                cv = query.algebra
+                while cv.p.name in {"Project", "OrderBy", "Extend"}:
+                    cv = cv.p
+                cv.p = CompValue("Join", p1=cv.p, p2=vals)
+
         # XXX Figure these out later
         #if queryGraph:
         #    raise NotImplementedError
@@ -70,6 +83,9 @@ class R2RStore(SPARQLStore):
             sql = self.converter.get_sql_query_object(query_obj)
         except ImpossibleQueryException:
             sql = None
+        except NotImplementedError as e:
+            logging.warning(f"SQL translation not implemented: {e}; query:{query}")
+            raise
         bindings = self.exec(sql) if sql is not None else []
         r = Result("SELECT")
         r.vars = vars
