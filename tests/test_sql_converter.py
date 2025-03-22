@@ -663,3 +663,21 @@ class TestSQLConverter(BaseSQLConvertingTest):
     def test_neg(self):
         self.check('''SELECT (-?t0_Freight AS ?neg_freight) { ?t0 a Demo:Orders. ?t0 Demo:freight ?t0_Freight. }''',
                    '''SELECT -t0."Freight" AS neg_freight FROM "Orders" AS t0''')        
+        
+
+    def test_values_clause(self):
+        self.check('''SELECT ?x ?y ?z { VALUES (?x ?y ?z) { (1 2 3) (4 5 6) (7 8 9) } }''',
+                   '''SELECT vals.x AS x, vals.y AS y, vals.z AS z FROM ( VALUES (1, 2, 3), (4, 5, 6), (7, 8, 9)) AS vals (x, y, z)''')
+
+    def test_values_clause_at_end(self):
+        self.check('''SELECT ?x { ?o a Demo:Orders. ?o Demo:shipcity ?city. ?o Demo:orderid ?x } VALUES ?city { "London" "Paris" "Madrid" }''',
+                   '''SELECT o."OrderID" AS x FROM "Orders" AS o, ( VALUES ('London'), ('Paris'), ('Madrid')) AS vals (city) WHERE o."ShipCity" = vals.city''')
+
+    @unittest.expectedFailure
+    #Right now multiple VALUES clauses side by side are not supported: come out with the same name 'vals'.
+    def test_two_values_clauses(self):
+        self.check('''SELECT ?x ?y { 
+                        VALUES ?x { 1 2 } 
+                        VALUES ?y { 3 4 } 
+                   }''',
+                   '''SELECT vals.x AS x, vals.y AS y FROM ( VALUES (1), (2)) AS vals (x), ( VALUES (3), (4)) AS vals2 (y)''')

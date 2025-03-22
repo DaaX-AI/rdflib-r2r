@@ -6,11 +6,11 @@ from rdflib_r2r.types import BGP, SQLQuery
 
 
 import sqlalchemy
-from rdflib import Graph, Literal, URIRef, Variable
+from rdflib import Literal, URIRef, Variable
 from rdflib.plugins.sparql.parserutils import CompValue
 from rdflib.term import Node
 from rdflib.util import from_n3
-from sqlalchemy import ColumnElement, Dialect, and_ as sql_and, except_, func as sqlfunc, literal, null, or_ as sql_or
+from sqlalchemy import ColumnElement, Values, and_ as sql_and, column, except_, func as sqlfunc, literal, null, or_ as sql_or, select
 from sqlalchemy.sql import ColumnElement, func as sqlfunc, literal
 from sqlalchemy.sql.expression import case, distinct
 
@@ -369,7 +369,18 @@ class QueryConversions(ABC):
         onclause = sql_and(*merge_conds) if merge_conds else literal(True)
         joined_from = from1.join(from2, isouter=True, onclause=onclause)
         return query1.with_only_columns(*allcols).select_from(joined_from)
+    
+    def queryValues(self, part) -> SQLQuery:
+        vals: list[dict[Variable, Node]] = part.res
+        vars = [ v for v in part.res[0].keys() ]
 
+        value_rows = []
+        for val_dict in vals:
+            value_rows.append(tuple(self.queryExpr(val_dict[var], {}) for var in vars))
+
+        values_clause = Values(*[column(str(v)) for v in vars]).data(value_rows).alias('vals')
+        result = select(*[col.label(col.name) for col in values_clause.exported_columns])
+        return result
 
     def queryPart(self, part:CompValue) -> SQLQuery:
         if part.name == "BGP":
@@ -396,6 +407,8 @@ class QueryConversions(ABC):
             return self.queryUnion(part)
         if part.name == "LeftJoin":
             return self.queryLeftJoin(part)
+        if part.name == "values":
+            return self.queryValues(part)
         if part.name == "SelectQuery":
             return self.queryPart(part.p)
 
