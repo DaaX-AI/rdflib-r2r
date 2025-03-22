@@ -349,7 +349,10 @@ class QueryConversions(ABC):
     def queryLeftJoin(self, part) -> SQLQuery:
 
         query1 = as_simple_select(self.queryPart(part.p1))
-        query2 = as_simple_select(self.queryPart(part.p2))
+        try:
+            query2 = as_simple_select(self.queryPart(part.p2))
+        except ImpossibleQueryException as e:
+            return query1
 
         allcols, merge_conds = merge_exported_columns(query1, query2)
         named_cols = { c.name: c for c in allcols }
