@@ -281,7 +281,10 @@ class SQLConverter(QueryConversions):
                 if same_expressions(expr,vex):
                     yield st
                 else:
-                    yield replace(st, wheres=st.wheres + list(equal(vex, expr)))
+                    try:
+                        yield replace(st, wheres=st.wheres + list(equal(vex, expr)))
+                    except ImpossibleQueryException:
+                        pass
             else:
                 yield replace(st, var_expressions={**st.var_expressions, node: expr})
 
@@ -305,7 +308,10 @@ class SQLConverter(QueryConversions):
                 if isinstance(node, SPARQLVariable):
                     yield from match_variable(node, colex)
                 else:
-                    yield replace(st, wheres=st.wheres + list(equal(colex, toPython(node))))
+                    try:
+                        yield replace(st, wheres=st.wheres + list(equal(colex, toPython(node))))
+                    except ImpossibleQueryException:
+                        pass
                 return # Only one term spec is allowed
 
             for template in mg.objects(tm, rr.template):

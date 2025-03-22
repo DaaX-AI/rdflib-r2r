@@ -24,7 +24,7 @@ from rdflib.plugins.sparql.parserutils import CompValue
 import sqlalchemy
 from sqlalchemy.sql import ColumnElement, func as sqlfunc, literal
 import sqlalchemy.sql.operators
-from sqlalchemy import ColumnElement, CompoundSelect, Label, literal, select, null, Dialect, Subquery
+from sqlalchemy import ColumnElement, CompoundSelect, Label, literal, select, null, Dialect, Subquery, BindParameter
 from sqlalchemy import union_all, or_ as sql_or, and_ as sql_and
 from sqlalchemy import types as sqltypes, func as sqlfunc
 from sqlalchemy.sql.expression import Select, Function, ClauseElement
@@ -150,6 +150,9 @@ class TemplateInfo:
     template: str
     columns: tuple[tuple[str,ColumnElement],...]
     table: NamedFromClause|None = None
+    
+    def template_with_columns(self) -> str:
+        return self.template.format(*(f'{{{c.name}}}' for _,c in self.columns))
 
     def column(self, name:str) -> ColumnElement:
         for n,c in self.columns:
@@ -284,21 +287,24 @@ def get_template_expansion_info(e:Any) -> TemplateInfo|None:
         e = e.element
     return e._annotations.get("expansion_of", None) if isinstance(e, ClauseElement) else None
 
-def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElement|None:
+def is_literal(ce:ColumnElement) -> bool:
+    return isinstance(ce, BindParameter)
+
+def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> List[ColumnElement[bool]]|None:
     
-    def try_template_to_literal_match(exp_info, lc):
-        if hasattr(lc, "is_literal") and lc.is_literal:
+    def try_template_to_literal_match(exp_info:TemplateInfo, lc) -> List[ColumnElement[bool]]|None:
+        if is_literal(lc):
             bv = lc.value
             if isinstance(bv, str):
-                d = parse_with_template(bv, exp_info["template"])
+                d = parse_with_template(bv, exp_info.template_with_columns())
                 if d is not None:
                     eqs = []
-                    for k,v in exp_info["columns"].items():
-                        if k in d:
-                            eqs.append(v == literal(d[k]) if eq else v != literal(d[k]))
-                        else:
-                            return None
-                    return sql_and(*eqs) if eq else sql_or(*eqs)
+                    for k,v in exp_info.columns:
+                        eqs.extend(equal(v, literal(d[k]), eq=eq))
+                    return eqs
+            if not eq:
+                return []
+            raise ImpossibleQueryException(f"Template mismatch: {lc.value} doesn't match template {exp_info.template_with_columns()}")
         return None
     
     exp_info_a = get_template_expansion_info(a)
@@ -313,28 +319,38 @@ def try_match_templates(a:ColumnElement, b:ColumnElement, eq:bool) -> ColumnElem
         return try_template_to_literal_match(exp_info_b, a)
         
     # Both have templates    
-    if exp_info_a.template != exp_info_b.template:
-        return None
+    if exp_info_a.template == exp_info_b.template:
+        eqs = []
+        for k, va in exp_info_a.columns:
+            vb = exp_info_b.column(k)
+            if vb is not None:
+                eqs.extend(equal(va, vb, eq=eq))
+            else:
+                return None
+        return eqs
+    
+    if eq:
+        raise ImpossibleQueryException(f"Template mismatch: {exp_info_a.template_with_columns()} != {exp_info_b.template_with_columns()}")
+    else:
+        return []
 
-    eqs = []
-    for k, va in exp_info_a.columns:
-        vb = exp_info_b.column(k)
-        if vb is not None:
-            eqs.append(va == vb if eq else va != vb)
-        else:
-            return None
-    return sql_and(*eqs) if eq else sql_or(*eqs)
-
-
-def equal(*expressions:ColumnElement, eq=True) -> Generator[ColumnElement[bool],None,None]:
+def equal(*expressions:ColumnElement, eq=True) -> List[ColumnElement[bool]]:
+    results:List[ColumnElement[bool]] = []
     if expressions:
         e0, *es = expressions
         for e in es:
             eqty = try_match_templates(e0, e, eq)
             if eqty is not None:
-                yield eqty
-            else:    
-                yield (e0 == e) if eq else (e0 != e) 
+                results.extend(eqty)
+            elif is_literal(e0) and is_literal(e):
+                literals_are_equal = e0.value == e.value
+                if eq == literals_are_equal:
+                    continue
+                else:
+                    raise ImpossibleQueryException(f"Literal mismatch: {e0.value} {'==' if eq else '!='} {e.value}")
+            else: 
+                results.append((e0 == e) if eq else (e0 != e))
+    return results
 
 def collect_external_named_vars(part:CompValue, stop_at:CompValue|None, dest:Set[str]):
     if part is stop_at:
@@ -482,16 +498,19 @@ def format_template(template:str, tab:NamedFromClause, is_uri:bool) -> ColumnEle
     format_tuples = Formatter().parse(template)
     parts:List[ColumnElement] = []
     columns = []
+    template_without_columns = StringIO()
     for prefix, colname, _, _ in format_tuples:
         if prefix != "":
             parts.append(literal(prefix))
+            template_without_columns.write(prefix)
         if colname:
             col = tab.c[colname]
             parts.append(col)
             columns.append((colname, col))
+            template_without_columns.write('{}')
 
     return sqlfunc.concat(*parts)._annotate({
-        "expansion_of": TemplateInfo(template=template, table=tab, columns= tuple(columns), is_iri=is_uri)
+        "expansion_of": TemplateInfo(template=template_without_columns.getvalue(), table=tab, columns= tuple(columns), is_iri=is_uri)
     })
 
 

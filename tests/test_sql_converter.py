@@ -727,12 +727,11 @@ rr:predicateObjectMap [ rr:predicateMap [ rr:constant rdfs:label ] ; rr:objectMa
                    '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', o."ShipCity") AS city FROM "Orders" AS o''')
 
     #XXX We should not need to have the same table twice.
-    @pytest.mark.xfail(reason="Since I added rdfs:label for categories, getting extra code trying to match category to a city")
     def test_2_classes_one_table(self):
         self.check('''SELECT ?freight ?city ?city_name{ ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. ?city a Demo:City. ?city rdfs:label ?city_name. }''',
                    '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', city."ShipCity") AS city, city."ShipCity" AS city_name FROM "Orders" AS o, "Orders" AS city WHERE city."ShipCity" = o."ShipCity"''')
         
-    @pytest.mark.xfail(reason="Since I added rdfs:label for categories, getting extra code trying to match category to a city")
+    #XXX We should not need to have the same table twice.
     def test_2_classes_one_table_no_type(self):
         self.check('''SELECT ?freight ?city_name{ ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. ?city rdfs:label ?city_name. }''',
                    '''SELECT o."Freight" AS freight, city."ShipCity" AS city_name FROM "Orders" AS o, "Orders" AS city WHERE o."ShipCity" = city."ShipCity"''')
