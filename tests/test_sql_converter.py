@@ -107,6 +107,8 @@ class TestSQLConverter(BaseSQLConvertingTest):
         super().setUp()
         if self._testMethodName == "test_column_for_direct_path":
             self.patch_graph_for_test_column_for_direct_path()
+        elif self._testMethodName in ("test_2_classes_one_table", "test_aux_table_basic", "test_aux_table_link"):
+            self.patch_graph_for_aux_table()
         self.conv = SQLConverter(self.db, self.mapping_graph)
 
     def check(self, sparql:str, expected_sql:str|None):
@@ -681,3 +683,44 @@ class TestSQLConverter(BaseSQLConvertingTest):
                         VALUES ?y { 3 4 } 
                    }''',
                    '''SELECT vals.x AS x, vals.y AS y FROM ( VALUES (1), (2)) AS vals (x), ( VALUES (3), (4)) AS vals2 (y)''')
+        
+    def patch_graph_for_aux_table(self):
+        #1. Find the right object map.
+        om = list(self.mapping_graph.query( 
+            '''select ?om {
+                ?tm rr:logicalTable [  rr:tableName "Orders" ];
+                  rr:predicateObjectMap [ rr:predicateMap [ rr:constant Demo:shipcity ] ; rr:objectMap ?om ]
+            }
+            '''
+        ))[0][0] # type: ignore
+
+        #2. Remove the column    mapping
+        self.mapping_graph.remove((om, rr.column, None))
+
+        #3. Add template mapping instead.
+        self.mapping_graph.add((om, rr.template, Literal("http://localhost:8890/Demo/City/{ShipCity}")))
+
+
+        TTL = '''
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix Demo: <http://localhost:8890/schemas/Demo/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        <#TriplesMapCity> a rr:TriplesMap; rr:logicalTable [ rr:tableSchema "Demo" ; rr:tableOwner "demo" ; rr:tableName "Orders" ]; 
+rr:subjectMap [ rr:termtype "IRI"  ; rr:template "http://localhost:8890/Demo/City/{ShipCity}"; rr:class Demo:City; rr:graph <http://localhost:8890/Demo#> ];
+rr:predicateObjectMap [ rr:predicateMap [ rr:constant rdfs:label ] ; rr:objectMap [ rr:column "ShipCity" ]; ] .'''
+
+        self.mapping_graph.parse(data=TTL, format="turtle")
+
+    def test_aux_table_basic(self):
+        self.check('''SELECT ?city ?city_name { ?city a Demo:City. ?city rdfs:label ?city_name. }''',
+                   '''SELECT concat('http://localhost:8890/Demo/City/', city."ShipCity") AS city, city."ShipCity" AS city_name FROM "Orders" AS city''')
+
+    def test_aux_table_link(self):
+        self.check('''SELECT ?freight ?city { ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. }''',
+                   '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', o."ShipCity") AS city FROM "Orders" AS o''')
+
+    #XXX We should not need to have the same table twice.
+    def test_2_classes_one_table(self):
+        self.check('''SELECT ?freight ?city ?city_name{ ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. ?city a Demo:City. ?city rdfs:label ?city_name. }''',
+                   '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', city."ShipCity") AS city, city."ShipCity" AS city_name FROM "Orders" AS o, "Orders" AS city WHERE city."ShipCity" = o."ShipCity"''')
