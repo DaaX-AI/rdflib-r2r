@@ -122,11 +122,11 @@ class R2RStore(SPARQLStore):
         uri = re.sub("<ENCODE>(.+?)</ENCODE>", lambda x: iri_safe(x.group(1)), iri)
         return URIRef(uri, base=self.base)
 
-    def make_node(self, val) -> Identifier:
-        isstr = isinstance(val, str)
+    def make_node(self, val) -> Identifier|None:
         if val is None:
-            raise ValueError("None value in result")
-        elif (not isstr) or (val[0] not in '"<_'):
+            return None
+        isstr = isinstance(val, str)
+        if (not isstr) or (val[0] not in '"<_'):
             if type(val) == bytes:
                 return Literal(
                     base64.b16encode(val),
