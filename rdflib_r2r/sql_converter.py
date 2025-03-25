@@ -74,6 +74,104 @@ class ProcessingState:
             return None
         else:
             return self
+        
+    def match_node_to_term_map(self, node:Node|Path, term_map:Node, position: LiteralType["S","P","O"], 
+                tab:NamedFromClause) -> "Generator[ProcessingState, None, None]":
+        mg = self.store.mapping_graph
+        if isinstance(node, Path):
+            if position != "P":
+                return
+            for cs in mg.objects(term_map, SequencePath(rr.predicateMap, rr.chainStr)):
+                if node.n3(mg.namespace_manager) == str(cs):
+                    yield self
+            return
+
+        if position == "S":
+            map_property = rr.subjectMap
+            shortcut_property = rr.subject
+        elif position == "P":
+            map_property = rr.predicateMap
+            shortcut_property = rr.predicate
+        elif position == "O":
+            map_property = rr.objectMap
+            shortcut_property = rr.object
+        else:
+            raise ValueError("Invalid position: " + str(position))
+        
+        def match_variable(node:SPARQLVariable, expr: ColumnElement) -> Generator[ProcessingState, None, None]:
+            vex = self.var_expressions.get(node, None)
+            if vex is not None:
+                if same_expressions(expr,vex):
+                    yield self
+                else:
+                    try:
+                        yield replace(self, wheres=self.wheres + list(equal(vex, expr)))
+                    except ImpossibleQueryException:
+                        pass
+            else:
+                yield replace(self, var_expressions={**self.var_expressions, node: expr})
+
+        for const in mg.objects(term_map, AlternativePath(shortcut_property, SequencePath(map_property, rr.constant))):
+            if isinstance(node, SPARQLVariable):
+                yield from match_variable(node, literal(toPython(const)))
+            elif const == node:
+                yield self
+            return # Only one term spec is allowed
+        
+        for tm in mg.objects(term_map, map_property):
+            #is_iri = True
+            #if position == "O" and (tm, rr.datatype, None) in mg or (tm, rr.language, None) in mg:
+            #    is_iri = False
+                
+            for column in mg.objects(tm, rr.column):
+                #if position == "O":
+                #    is_iri = False
+
+                colex = tab.c[str(column)]
+                if isinstance(node, SPARQLVariable):
+                    yield from match_variable(node, colex)
+                else:
+                    try:
+                        yield replace(self, wheres=self.wheres + list(equal(colex, toPython(node))))
+                    except ImpossibleQueryException:
+                        pass
+                return # Only one term spec is allowed
+
+            for template in mg.objects(tm, rr.template):
+                is_iri = position == 'S' or position == 'P' or str(mg.value(tm, rr.termType)) == 'IRI'
+                expr = format_template(str(template), tab, is_iri)
+                if isinstance(node, SPARQLVariable):
+                    yield from match_variable(node, expr)
+                elif is_iri and isinstance(node, URIRef) or not is_iri and isinstance(node, Literal):
+                    col_vals = parse_with_template(str(node), str(template))
+                    if col_vals:
+                        wheres = []
+                        for col, val in col_vals.items():
+                            ptype = get_python_column_type(tab, col)
+                            if ptype:
+                                pval = ptype(val)
+                            else:
+                                pval = val #TODO ???
+                            wheres.append(tab.c[col] == pval)
+                        yield replace(self, wheres=self.wheres + wheres)
+                    # The old brute-force way:
+                    #yield replace(self, wheres=self.wheres + [expr == toPython(node)])
+                return
+
+            for parent_triple_map in mg.objects(tm, rr.parentTriplesMap):
+                for jrst in iter_opt(self.ensure_row(node, parent_triple_map)):
+                    wheres: List[ColumnElement[bool]] = []
+                    jrow = jrst.rows[node]
+                    for join in mg.objects(tm, rr.joinCondition):
+                        childColumn = mg.value(join, rr.child)
+                        assert childColumn
+                        parentColumn = mg.value(join, rr.parent)
+                        assert parentColumn
+                        wheres.append(tab.c[str(childColumn)] == jrow.table.c[str(parentColumn)])
+
+                    jrst = replace(jrst, wheres = jrst.wheres + wheres)
+                    yield from jrst.match_node_to_term_map(node, parent_triple_map, "S", jrow.table)
+
 
 def get_python_column_type(tab:FromClause, col_name:str) -> Optional[Type[Any]]:
     #if isinstance(tab, FromClauseAlias):
@@ -131,17 +229,22 @@ def resolve_paths_in_triples(triples: BGP,  exclude_func: Callable[[Path],bool])
         for ts in resolve_paths_in_triples(triples[1:], exclude_func):
             yield [t0] + ts
 
+SQLConverterPlugin = Callable[[ProcessingState], Generator[ProcessingState, None, None]]
+
 class SQLConverter(QueryConversions):
 
     pomaps_by_predicate: Dict[URIRef|Literal|None, List[Node]]
     metadata:MetaData
     dialect:Dialect
     mapping_graph:Graph
+    plugins: List[SQLConverterPlugin]
 
-    def __init__(self, db: Engine, mapping_graph: Graph):
+    def __init__(self, db: Engine, mapping_graph: Graph, *, plugins: Optional[List[SQLConverterPlugin]] = None):
         super().__init__()
         self.mapping_graph = mapping_graph
         self.pomaps_by_predicate = {}
+        self.plugins = plugins or []
+        self.plugins.append(self.process_next_triple)
         for pm in self.mapping_graph.objects(predicate=rr.predicateObjectMap, unique=True):
             found = False
             for const in self.mapping_graph.objects(pm, AlternativePath(rr.predicate, SequencePath(rr.predicateMap, rr.constant))):
@@ -167,9 +270,6 @@ class SQLConverter(QueryConversions):
         return translateQuery(parsetree, base, initNs)
 
     def get_sql_query_object(self, sparqlQuery: str|Query, base:str|None=None, initNs:Mapping[str, Any] | None={}) -> SQLQuery:
-        from rdflib.plugins.sparql.parser import parseQuery
-        from rdflib.plugins.sparql.algebra import translateQuery
-
         if isinstance(sparqlQuery, str):
             queryobj = self.parse_sparql_query(sparqlQuery, base, initNs)
         else:
@@ -199,11 +299,12 @@ class SQLConverter(QueryConversions):
             if not st.triples:
                 resulting_states.append(st)
             else:
-                for nst in self.process_next_triple(st):
-                    if not nst.triples:
-                        resulting_states.append(nst)
-                    else:
-                        q.put(nst)
+                for plugin in self.plugins:
+                    for nst in plugin(st):
+                        if not nst.triples:
+                            resulting_states.append(nst)
+                        else:
+                            q.put(nst)
 
         if not resulting_states:
             raise ImpossibleQueryException(f"Failed to translate to SQL: { [n3(t,self.mapping_graph) for t in bgp]}")
@@ -238,7 +339,7 @@ class SQLConverter(QueryConversions):
                 for tm in mg.subjects(rr.subjectMap, sm):
                     for rst in iter_opt(st.ensure_row(s, tm)):
                         row = rst.rows[s]
-                        for st1 in self.match_node_to_term_map(s, tm, "S", rst, row.table):
+                        for st1 in rst.match_node_to_term_map(s, tm, "S", row.table):
                             yield replace(st1, triples=st1.triples[1:])
 
         pkey = Literal(p.n3(self.mapping_graph.namespace_manager)) if isinstance(p, Path) else p
@@ -247,107 +348,10 @@ class SQLConverter(QueryConversions):
             for tm in mg.subjects(rr.predicateObjectMap, pom):
                 for stR in iter_opt(st.ensure_row(s,tm)):
                     row = stR.rows[s]
-                    for st1 in self.match_node_to_term_map(s, tm, "S", stR, row.table):
-                        for st2 in self.match_node_to_term_map(o, pom, "O", st1, row.table):
-                            for st3 in self.match_node_to_term_map(p, pom, "P", st2, row.table):
+                    for st1 in stR.match_node_to_term_map(s, tm, "S", row.table):
+                        for st2 in st1.match_node_to_term_map(o, pom, "O", row.table):
+                            for st3 in st2.match_node_to_term_map(p, pom, "P", row.table):
                                 yield replace(st3, triples=st3.triples[1:])
-
-    def match_node_to_term_map(self, node:Node|Path, term_map:Node, position: LiteralType["S","P","O"], st:ProcessingState, 
-                tab:NamedFromClause) -> Generator[ProcessingState, None, None]:
-        mg = self.mapping_graph
-        if isinstance(node, Path):
-            if position != "P":
-                return
-            for cs in mg.objects(term_map, SequencePath(rr.predicateMap, rr.chainStr)):
-                if node.n3(mg.namespace_manager) == str(cs):
-                    yield st
-            return
-
-        if position == "S":
-            map_property = rr.subjectMap
-            shortcut_property = rr.subject
-        elif position == "P":
-            map_property = rr.predicateMap
-            shortcut_property = rr.predicate
-        elif position == "O":
-            map_property = rr.objectMap
-            shortcut_property = rr.object
-        else:
-            raise ValueError("Invalid position: " + str(position))
-        
-        def match_variable(node:SPARQLVariable, expr: ColumnElement) -> Generator[ProcessingState, None, None]:
-            vex = st.var_expressions.get(node, None)
-            if vex is not None:
-                if same_expressions(expr,vex):
-                    yield st
-                else:
-                    try:
-                        yield replace(st, wheres=st.wheres + list(equal(vex, expr)))
-                    except ImpossibleQueryException:
-                        pass
-            else:
-                yield replace(st, var_expressions={**st.var_expressions, node: expr})
-
-        for const in mg.objects(term_map, AlternativePath(shortcut_property, SequencePath(map_property, rr.constant))):
-            if isinstance(node, SPARQLVariable):
-                yield from match_variable(node, literal(toPython(const)))
-            elif const == node:
-                yield st
-            return # Only one term spec is allowed
-        
-        for tm in mg.objects(term_map, map_property):
-            #is_iri = True
-            #if position == "O" and (tm, rr.datatype, None) in mg or (tm, rr.language, None) in mg:
-            #    is_iri = False
-                
-            for column in mg.objects(tm, rr.column):
-                #if position == "O":
-                #    is_iri = False
-
-                colex = tab.c[str(column)]
-                if isinstance(node, SPARQLVariable):
-                    yield from match_variable(node, colex)
-                else:
-                    try:
-                        yield replace(st, wheres=st.wheres + list(equal(colex, toPython(node))))
-                    except ImpossibleQueryException:
-                        pass
-                return # Only one term spec is allowed
-
-            for template in mg.objects(tm, rr.template):
-                is_iri = position == 'S' or position == 'P' or str(mg.value(tm, rr.termType)) == 'IRI'
-                expr = format_template(str(template), tab, is_iri)
-                if isinstance(node, SPARQLVariable):
-                    yield from match_variable(node, expr)
-                elif is_iri and isinstance(node, URIRef) or not is_iri and isinstance(node, Literal):
-                    col_vals = parse_with_template(str(node), str(template))
-                    if col_vals:
-                        wheres = []
-                        for col, val in col_vals.items():
-                            ptype = get_python_column_type(tab, col)
-                            if ptype:
-                                pval = ptype(val)
-                            else:
-                                pval = val #TODO ???
-                            wheres.append(tab.c[col] == pval)
-                        yield replace(st, wheres=st.wheres + wheres)
-                    # The old brute-force way:
-                    #yield replace(st, wheres=st.wheres + [expr == toPython(node)])
-                return
-
-            for parent_triple_map in mg.objects(tm, rr.parentTriplesMap):
-                for jrst in iter_opt(st.ensure_row(node, parent_triple_map)):
-                    wheres: List[ColumnElement[bool]] = []
-                    jrow = jrst.rows[node]
-                    for join in mg.objects(tm, rr.joinCondition):
-                        childColumn = mg.value(join, rr.child)
-                        assert childColumn
-                        parentColumn = mg.value(join, rr.parent)
-                        assert parentColumn
-                        wheres.append(tab.c[str(childColumn)] == jrow.table.c[str(parentColumn)])
-
-                    jrst = replace(jrst, wheres = jrst.wheres + wheres)
-                    yield from self.match_node_to_term_map(node, parent_triple_map, "S", jrst, jrow.table)
 
     def add_synthetic_chain_triple_maps(self):
 
