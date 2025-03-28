@@ -694,11 +694,11 @@ def test_aux_table_link(patched_converter_for_aux_table:SQLConverter):
 #XXX We should not need to have the same table twice.
 def test_2_classes_one_table(patched_converter_for_aux_table:SQLConverter):
     Checker(patched_converter_for_aux_table)('''SELECT ?freight ?city ?city_name{ ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. ?city a Demo:City. ?city rdfs:label ?city_name. }''',
-                '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', city."ShipCity") AS city, city."ShipCity" AS city_name FROM "Orders" AS o, "Orders" AS city WHERE city."ShipCity" = o."ShipCity"''')
+                '''SELECT o."Freight" AS freight, concat('http://localhost:8890/Demo/City/', o."ShipCity") AS city, o."ShipCity" AS city_name FROM "Orders" AS o''')
     
 #XXX We should not need to have the same table twice.
 def test_2_classes_one_table_no_type(patched_converter_for_aux_table:SQLConverter):
     Checker(patched_converter_for_aux_table)('''SELECT ?freight ?city_name{ ?o a Demo:Orders. ?o Demo:freight ?freight. ?o Demo:shipcity ?city. ?city rdfs:label ?city_name. }''',
-                '''SELECT o."Freight" AS freight, city."ShipCity" AS city_name FROM "Orders" AS o, "Orders" AS city WHERE o."ShipCity" = city."ShipCity"''')
+                '''SELECT o."Freight" AS freight, o."ShipCity" AS city_name FROM "Orders" AS o''')
         
 

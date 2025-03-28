@@ -11,6 +11,6 @@ SPARQLVariable = Variable | BNode
 AnyTerm = Union[URIRef, Literal,SPARQLVariable]
 Triple = Tuple[URIRef, URIRef, AnyTerm]
 TriplePattern = Union[URIRef, Literal, SPARQLVariable]
-SearchQuery = Tuple[Optional[URIRef|SPARQLVariable], Optional[URIRef|SPARQLVariable|Path], Optional[AnyTerm]]
+SearchQuery = Tuple[URIRef|SPARQLVariable, URIRef|SPARQLVariable|Path, AnyTerm]
 BGP = Sequence[SearchQuery]
 SQLQuery = Select|CompoundSelect

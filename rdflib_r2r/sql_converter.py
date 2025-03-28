@@ -44,36 +44,39 @@ class ProcessingState:
     wheres: List[ColumnElement[bool]]
     triples: List[SearchQuery]
 
-    def ensure_row(self, s:Node, triple_map:Node) -> "Optional[ProcessingState]":
+    def ensure_row(self, s:Node, triple_map:Node, atab:Optional[NamedFromClause] = None) -> "Optional[ProcessingState]":
         row = self.rows.get(s, None)
         tab = _get_table(self.store.mapping_graph, triple_map)
         tab = self.store.metadata.tables[tab.name]
         if not row:
-            if isinstance(s, Variable):
-                alias = str(s)
+            if atab is None:
+                if isinstance(s, Variable):
+                    alias = str(s)
 
-                key = (alias, tab.name)
-                if key in self.store.current_project.named_tables:
-                    atab = self.store.current_project.named_tables[key]
+                    key = (alias, tab.name)
+                    if key in self.store.current_project.named_tables:
+                        atab = self.store.current_project.named_tables[key]
+                    else:
+                        atab = tab.alias(alias)
+                        self.store.current_project.named_tables[key] = atab
                 else:
+                    alias0 = make_short_alias(tab.name)
+                    alias = alias0
+                    i = 0
+                    current_aliases = { row.table.name for row in self.rows.values() }
+                    while alias in current_aliases or alias in self.store.current_project.named_vars:
+                        alias = alias0 + str(i)
+                        i += 1
                     atab = tab.alias(alias)
-                    self.store.current_project.named_tables[key] = atab
-            else:
-                alias0 = make_short_alias(tab.name)
-                alias = alias0
-                i = 0
-                current_aliases = { row.table.name for row in self.rows.values() }
-                while alias in current_aliases or alias in self.store.current_project.named_vars:
-                    alias = alias0 + str(i)
-                    i += 1
-                atab = tab.alias(alias)
 
             row = Row(subject=s, table=atab)
             return replace(self, rows={**self.rows, s: row})
-        elif cast(Alias, row.table).original != tab:
+        elif cast(Alias, row.table).original != tab or atab is not None and row.table != atab:
             return None
         else:
             return self
+        
+    
         
     def match_node_to_term_map(self, node:Node|Path, term_map:Node, position: LiteralType["S","P","O"], 
                 tab:NamedFromClause) -> "Generator[ProcessingState, None, None]":
@@ -229,6 +232,11 @@ def resolve_paths_in_triples(triples: BGP,  exclude_func: Callable[[Path],bool])
         for ts in resolve_paths_in_triples(triples[1:], exclude_func):
             yield [t0] + ts
 
+
+def replace_subordinate_map(stR:ProcessingState, pom:Node, tab:NamedFromClause) -> ProcessingState:
+    #TODO
+    return stR
+
 SQLConverterPlugin = Callable[[ProcessingState], Generator[ProcessingState, None, None]]
 
 class SQLConverter(QueryConversions):
@@ -238,6 +246,7 @@ class SQLConverter(QueryConversions):
     dialect:Dialect
     mapping_graph:Graph
     plugins: List[SQLConverterPlugin]
+    subordinate_map_links: Dict[URIRef, Node]
 
     def __init__(self, db: Engine, mapping_graph: Graph, *, plugins: Optional[List[SQLConverterPlugin]] = None):
         super().__init__()
@@ -257,7 +266,7 @@ class SQLConverter(QueryConversions):
                 raise NotImplementedError("TODO (2): Only constant predicates are supported in predicateObjectMaps")
 
         self.add_synthetic_chain_triple_maps()
-
+        self.subordinate_map_links = self.add_subordinate_map_links()
         self.metadata = MetaData()
         self.metadata.reflect(db)
         self.dialect = db.dialect
@@ -291,6 +300,7 @@ class SQLConverter(QueryConversions):
             return Literal(p.n3(self.mapping_graph.namespace_manager)) in self.pomaps_by_predicate
         
         for rbgp in resolve_paths_in_triples(bgp, should_leave_path_alone):
+            rbgp.sort(key=lambda t: t[1] not in self.subordinate_map_links)
             q.put(ProcessingState(store=self, rows={}, var_expressions={}, wheres=[], triples=rbgp))
         resulting_states: List[ProcessingState] = []
 
@@ -326,9 +336,6 @@ class SQLConverter(QueryConversions):
     def process_next_triple(self, st: ProcessingState) -> Generator[ProcessingState, None, None]:
         mg = self.mapping_graph
         s, p, o = st.triples[0]
-        assert s
-        assert p 
-        assert o
         if not isinstance(p, (URIRef,Path)):
             raise NotImplementedError("TODO (2): Only URIRef or Path predicates are supported")
 
@@ -348,10 +355,21 @@ class SQLConverter(QueryConversions):
             for tm in mg.subjects(rr.predicateObjectMap, pom):
                 for stR in iter_opt(st.ensure_row(s,tm)):
                     row = stR.rows[s]
-                    for st1 in stR.match_node_to_term_map(s, tm, "S", row.table):
-                        for st2 in st1.match_node_to_term_map(o, pom, "O", row.table):
-                            for st3 in st2.match_node_to_term_map(p, pom, "P", row.table):
-                                yield replace(st3, triples=st3.triples[1:])
+                    if isinstance(p, URIRef):
+                        sub_map = self.subordinate_map_links.get(p, None)
+                        if sub_map:
+                            for stSR in iter_opt(stR.ensure_row(o, sub_map, row.table)):
+                                yield from self.match_triple_to_term_map(stSR, s, p, o, pom, tm, row.table)
+                            return
+
+                    yield from self.match_triple_to_term_map(stR, s, p, o, pom, tm, row.table)
+
+
+    def match_triple_to_term_map(self, st:ProcessingState, s:Node, p:Node, o:Node, pom:Node, tm:Node, atab:NamedFromClause) -> Generator[ProcessingState, None, None]:
+        for st1 in st.match_node_to_term_map(s, tm, "S", atab):
+            for st2 in st1.match_node_to_term_map(o, pom, "O", atab):
+                for st3 in st2.match_node_to_term_map(p, pom, "P", atab):
+                    yield replace(st3, triples=st3.triples[1:])
 
     def add_synthetic_chain_triple_maps(self):
 
@@ -410,3 +428,35 @@ class SQLConverter(QueryConversions):
                 '''
                 ):
             add_synthetic_chain_tm(tm2, pred2, pred1, col_name, True)    
+
+    def add_subordinate_map_links(self) -> Dict[URIRef, Node]:
+        triple_maps_by_log_table: dict[Node, List[Node]] = {}
+        for tm, lt in self.mapping_graph.subject_objects(SequencePath(rr.logicalTable, rr.tableName)):
+            triple_maps_by_log_table.setdefault(lt, []).append(tm)
+
+        subordination_links: Dict[URIRef, Node] = {}
+        for tms in triple_maps_by_log_table.values():
+            if len(tms) != 1:
+                for tm1 in tms:
+                    for tm2 in tms:
+                        if tm1 is tm2:
+                            continue
+                        sp = self._find_subordination_property(tm1, tm2)
+                        if sp:
+                            if sp in subordination_links:
+                                raise ValueError("Multiple subordinate maps with the same subordination property: " + str(sp))
+                            subordination_links[sp] = tm2
+
+        return subordination_links
+
+    def _find_subordination_property(self, parentMap:Node, childMap:Node) -> Optional[URIRef]:        
+        for tpl1 in self.mapping_graph.objects(childMap, SequencePath(rr.subjectMap, rr.template)):
+            for pomap in self.mapping_graph.objects(parentMap, rr.predicateObjectMap):
+                for tpl2 in self.mapping_graph.objects(pomap, SequencePath(rr.objectMap, rr.template)):
+                    if tpl1 == tpl2:
+                        for pred in self.mapping_graph.objects(pomap, AlternativePath(rr.predicate, SequencePath(rr.predicateMap, rr.constant))):
+                            if isinstance(pred, URIRef):
+                                return pred
+        return None
+
+
