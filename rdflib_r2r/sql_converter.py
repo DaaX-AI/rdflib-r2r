@@ -232,11 +232,6 @@ def resolve_paths_in_triples(triples: BGP,  exclude_func: Callable[[Path],bool])
         for ts in resolve_paths_in_triples(triples[1:], exclude_func):
             yield [t0] + ts
 
-
-def replace_subordinate_map(stR:ProcessingState, pom:Node, tab:NamedFromClause) -> ProcessingState:
-    #TODO
-    return stR
-
 SQLConverterPlugin = Callable[[ProcessingState], Generator[ProcessingState, None, None]]
 
 class SQLConverter(QueryConversions):
@@ -365,7 +360,7 @@ class SQLConverter(QueryConversions):
                     yield from self.match_triple_to_term_map(stR, s, p, o, pom, tm, row.table)
 
 
-    def match_triple_to_term_map(self, st:ProcessingState, s:Node, p:Node, o:Node, pom:Node, tm:Node, atab:NamedFromClause) -> Generator[ProcessingState, None, None]:
+    def match_triple_to_term_map(self, st:ProcessingState, s:Node, p:Node|Path, o:Node, pom:Node, tm:Node, atab:NamedFromClause) -> Generator[ProcessingState, None, None]:
         for st1 in st.match_node_to_term_map(s, tm, "S", atab):
             for st2 in st1.match_node_to_term_map(o, pom, "O", atab):
                 for st3 in st2.match_node_to_term_map(p, pom, "P", atab):
